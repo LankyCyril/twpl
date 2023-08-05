@@ -129,19 +129,14 @@ class Twpl():
             with open(self.__filename): # grow fd count, prevent exclusive locks
                 lock.release() # allow other concurrent locks to intercept
                 try:
-                    assert self.__n_exclusive == 0, "bug!"
                     with self.__countlock:
+                        assert self.__n_exclusive == 0, "bug!"
                         self.__n_concurrent += 1
                     yield self
                 finally:
                     with self.__countlock:
                         self.__n_concurrent -= 1
                         assert self.__n_concurrent >= 0, "bug!"
- 
-    @contextmanager
-    def unconditional(self):
-        """Dummy context manager that always allows operation"""
-        yield self
  
     def clean(self, *, min_age_ms):
         """Force remove lockfile if age is above `min_age_ms` regardless of state. Useful for cleaning up stale locks after crashes etc"""

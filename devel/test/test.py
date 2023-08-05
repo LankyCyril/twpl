@@ -74,10 +74,6 @@ def basic_methods(lockfilename):
         with Twpl(lockfilename).concurrent() as lock:
             assert lock.mode == CONCURRENT
         assert lock.mode is None
-    with NamedTest(f".unconditional({lockfilename!r})"):
-        with Twpl(lockfilename).unconditional() as lock:
-            assert lock.mode is None
-        assert lock.mode is None
     with NamedTest(f"_NOT_IMPLEMENTED"):
         for mode in EXCLUSIVE, CONCURRENT:
             try:
