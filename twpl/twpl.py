@@ -1,29 +1,52 @@
 from sys import platform
+from os import path, access, W_OK, stat, remove
+from glob import iglob
 from tempfile import NamedTemporaryFile
 from datetime import datetime
-from glob import iglob
-from os import access, W_OK, stat, remove
 from contextlib import contextmanager
 from filelock import Timeout as FileLockTimeoutError, FileLock
 
 
 __version__ = "0.0.2"
 
+_ERR_PROC_TEST = "test poll of /proc returned an unexpected value"
+_ERR_PLATFORM_TEST = "/proc not available and/or not a Linux/POSIX system"
 _ERR_EXPLICIT_NOT_IMPLEMENTED = " ".join((
-    "Explicit acquire/release methods are not implemented yet. Use context",
+    "explicit acquire/release methods are not implemented yet; use context",
     "managers Twpl(...).exclusive() and Twpl(...).concurrent() instead",
 ))
 _DEFAULT_POLL_MS = 100
 
 
-def _check_platform_capabilities():
-    """Only Linux (Unix?) is supported at the moment. /proc/[0-9]+/fd/* must exist and generate sane values"""
-    pass # TODO: something smarter than just checking all active PIDs because that feels excessive
-
-
-def _fds_exceed(filename, fdcount):
-    """Check if the number of open file descriptors for `filename` exceeds `fdcount`"""
-    pass
+def fds_exceed(filename, mincount):
+    """Check if number of open file descriptors for `filename` exceeds `mincount`"""
+    global fds_exceed
+    # fds_exceed bootstraps itself on first call; this avoids, on the one hand,
+    # checking on import and having to raise exceptions right away if something
+    # is wrong, and on the other, checking every time a Twpl object is created.
+    if not getattr(fds_exceed, "_bootstrapped", None):
+        if platform.startswith("linux") and path.isdir("/proc"):
+            def _fds_exceed(filename, mincount):
+                """Actual function is defined here"""
+                realpath, n = path.realpath(filename), 0
+                for fd in iglob("/proc/[0-9]*/fd/*"):
+                    if path.realpath(fd) == realpath:
+                        n += 1
+                        if n > mincount:
+                            return True
+                else:
+                    return False
+            with NamedTemporaryFile(mode="w") as tf: # quick self-test
+                with open(tf.name):
+                    if (not _fds_exceed(tf.name, 1)) or _fds_exceed(tf.name, 2):
+                        raise OSError(f"twpl: {_ERR_PROC_TEST}")
+                    else:
+                        _fds_exceed.__doc__ = fds_exceed.__doc__
+                        fds_exceed = _fds_exceed
+                        fds_exceed._bootstrapped = True
+                        return _fds_exceed(filename, mincount)
+        else:
+            raise OSError(f"twpl: {_ERR_PLATFORM_TEST}")
 
 
 class Twpl():
@@ -31,24 +54,23 @@ class Twpl():
  
     def __init__(self, filename):
         """Create lock object"""
-        _check_platform_capabilities()
         self._filename = filename
  
     def __acquire_exclusive(self, poll_ms):
-        raise NotImplementedError(_ERR_EXPLICIT_NOT_IMPLEMENTED)
+        raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
  
     def __release_exclusive(self):
-        raise NotImplementedError(_ERR_EXPLICIT_NOT_IMPLEMENTED)
+        raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
  
     def __acquire_concurrent(self):
-        raise NotImplementedError(_ERR_EXPLICIT_NOT_IMPLEMENTED)
+        raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
  
     def __release_concurrent(self):
-        raise NotImplementedError(_ERR_EXPLICIT_NOT_IMPLEMENTED)
+        raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
  
     def acquire(self, *, exclusive=None, concurrent=None, poll_ms=None):
         """User interface for explicit acquisition. Must specify `exclusive=True` XOR `concurrent=True`. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""
-        raise NotImplementedError(_ERR_EXPLICIT_NOT_IMPLEMENTED)
+        raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
         if exclusive and (not concurrent):
             if poll_ms is None:
                 poll_ms = _DEFAULT_POLL_MS
@@ -67,7 +89,7 @@ class Twpl():
  
     def release(self, *, exclusive=None, concurrent=None):
         """User interface for explicit release. Must specify `exclusive=True` XOR `concurrent=True`. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""
-        raise NotImplementedError(_ERR_EXPLICIT_NOT_IMPLEMENTED)
+        raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
  
     @contextmanager
     def exclusive(self, *, poll_ms=_DEFAULT_POLL_MS):
