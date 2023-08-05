@@ -48,9 +48,9 @@ def basic_methods(lockfilename):
         except Exception as e:
             assert isinstance(e, NotImplementedError)
     with NamedTest(f".clean({lockfilename!r})"):
-        Twpl(lockfilename).clean(min_age_ms=60000)
+        assert not Twpl(lockfilename).clean(min_age_ms=60000)
         assert path.isfile(lockfilename)
-        Twpl(lockfilename).clean(min_age_ms=0)
+        assert Twpl(lockfilename).clean(min_age_ms=0)
         assert not path.exists(lockfilename)
 
 
