@@ -1,9 +1,11 @@
 import setuptools
 from types import SimpleNamespace
+from twpl import __version__
+
 
 meta = SimpleNamespace(
     __name__ = "twpl",
-    __version__ = "0.0.1",
+    __version__ = __version__,
     __author__ = "Kirill Grigorev",
     __git_id__ = "LankyCyril",
     __license__ = "GPLv3",
