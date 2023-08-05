@@ -1,10 +1,11 @@
 from sys import platform
-from os import path, access, W_OK, stat, remove
+from os import path, stat, remove
 from glob import iglob
 from tempfile import NamedTemporaryFile
-from datetime import datetime
-from contextlib import contextmanager
 from filelock import Timeout as FileLockTimeoutError, FileLock
+from contextlib import contextmanager
+from time import sleep
+from datetime import datetime
 
 
 __version__ = "0.0.2"
@@ -18,13 +19,13 @@ _ERR_EXPLICIT_NOT_IMPLEMENTED = " ".join((
 _DEFAULT_POLL_MS = 100
 
 
-def fds_exceed(filename, mincount):
+def fds_exceed(filename, mincount): # TODO: cache /proc paths
     """Check if number of open file descriptors for `filename` exceeds `mincount`"""
     global fds_exceed
     # fds_exceed bootstraps itself on first call; this avoids, on the one hand,
     # checking on import and having to raise exceptions right away if something
-    # is wrong, and on the other, checking every time a Twpl object is created.
-    if not getattr(fds_exceed, "_bootstrapped", None):
+    # is wrong; and on the other, checking every time a Twpl object is created.
+    if not getattr(fds_exceed, "_is_bootstrapped", None): # TODO: not needed
         if platform.startswith("linux") and path.isdir("/proc"):
             def _fds_exceed(filename, mincount):
                 """Actual function is defined here"""
@@ -43,7 +44,7 @@ def fds_exceed(filename, mincount):
                     else:
                         _fds_exceed.__doc__ = fds_exceed.__doc__
                         fds_exceed = _fds_exceed
-                        fds_exceed._bootstrapped = True
+                        fds_exceed._is_bootstrapped = True
                         return _fds_exceed(filename, mincount)
         else:
             raise OSError(f"twpl: {_ERR_PLATFORM_TEST}")
@@ -54,7 +55,8 @@ class Twpl():
  
     def __init__(self, filename):
         """Create lock object"""
-        self._filename = filename
+        with FileLock(filename): # let filelock.FileLock() trigger checks
+            self._filename = filename
  
     def __acquire_exclusive(self, poll_ms):
         raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
@@ -94,18 +96,44 @@ class Twpl():
     @contextmanager
     def exclusive(self, *, poll_ms=_DEFAULT_POLL_MS):
         """Wait for all exclusive AND concurrent locks to release, acquire exclusive file lock, enter context, release this exclusive lock"""
-        pass
+        if not isinstance(poll_ms, (int, float)):
+            raise ValueError(f"Twpl.exclusive(): {poll_ms=!r} is not a number")
+        else:
+            poll_s = poll_ms / 1000
+        with FileLock(self._filename):
+            while fds_exceed(self._filename, 1): # wait for all locks
+                sleep(poll_s)
+            yield self
  
     @contextmanager
     def concurrent(self):
         """Wait for all exclusive locks to release, acquire concurrent file lock, enter context, release this concurrent lock"""
-        pass
+        with FileLock(self._filename) as lock: # intercept momentarily
+            with open(self._filename): # grow fd count, prevent exclusive locks
+                lock.release() # allow other concurrent locks to intercept
+                yield self
  
     @contextmanager
     def unconditional(self):
         """Dummy context manager that always allows operation"""
-        yield
+        yield self
  
-    def purge(self, *, min_age_ms=None):
+    def clean(self, *, min_age_ms=None):
         """Force remove lockfile if age is above `min_age_ms` regardless of state. Useful for cleaning up stale locks after crashes etc"""
-        pass
+        if not isinstance(min_age_ms, (int, float)):
+            raise ValueError(f"Twpl.clean(): {min_age_ms=!r} is not a number")
+        try:
+            with FileLock(self._filename, timeout=0): # no exclusive locks now
+                if not fds_exceed(self._filename, 1): # no concurrent locks;
+                    # new locks (either exclusive or concurrent) will not be
+                    # able to intercept while FileLock is locked on! Thus, here
+                    # we can be certain we would be removing an unused lockfile.
+                    st_ctime = stat(self._filename).st_ctime
+                    dt = datetime.now() - datetime.fromtimestamp(st_ctime)
+                    lock_age_ms = dt.total_seconds()*1000 + dt.microseconds/1000
+                    if lock_age_ms >= min_age_ms:
+                        remove(self._filename)
+                        return True
+        except FileLockTimeoutError: # something is currently locked on
+            pass
+        return False
