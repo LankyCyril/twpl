@@ -1,0 +1,10 @@
+from imp import load_source
+from os import makedirs
+from subprocess import call
+
+
+makedirs("./dist", exist_ok=True)
+meta = load_source("_", "./setup.py").meta
+tarball = "./dist/{}-{}.tar.gz".format(meta.__name__, meta.__version__)
+call(["python", "setup.py", "sdist"])
+call(["twine", "upload", "-r", "pypi", tarball])
