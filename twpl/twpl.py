@@ -63,8 +63,7 @@ class Twpl():
     def __init__(self, filename):
         """Create lock object"""
         with FileLock(filename): # let filelock.FileLock() trigger checks
-            self._filename = filename
-            self.__mode = None
+            self._filename, self.__mode = filename, None
  
     @property
     def mode(self):
