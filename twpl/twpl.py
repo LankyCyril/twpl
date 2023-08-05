@@ -12,11 +12,16 @@ __version__ = "0.0.2"
 
 _ERR_PROC_TEST = "test poll of /proc returned an unexpected value"
 _ERR_PLATFORM_TEST = "/proc not available and/or not a Linux/POSIX system"
-_ERR_EXPLICIT_NOT_IMPLEMENTED = " ".join((
-    "explicit acquire/release methods are not implemented yet; use context",
-    "managers Twpl(...).exclusive() and Twpl(...).concurrent() instead",
-))
 _DEFAULT_POLL_MS = 100
+
+EXCLUSIVE, CONCURRENT, UNCONDITIONAL = 0, 1, 2
+
+
+def _NOT_IMPLEMENTED():
+    raise NotImplementedError((
+        "twpl: explicit acquire/release methods are not implemented yet; use "
+        "context managers Twpl().exclusive() and Twpl().concurrent() instead"
+    ))
 
 
 def fds_exceed(filename, mincount): # TODO: cache /proc paths
@@ -53,45 +58,47 @@ def fds_exceed(filename, mincount): # TODO: cache /proc paths
 class Twpl():
     """Ties itself to a lockfile and provides exclusive (always singular) and concurrent (multiple in absence of exclusive) locks"""
  
+    __slots__ = "_filename", "__mode"
+ 
     def __init__(self, filename):
         """Create lock object"""
         with FileLock(filename): # let filelock.FileLock() trigger checks
             self._filename = filename
+            self.__mode = None
  
-    def __acquire_exclusive(self, poll_ms):
-        raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
+    @property
+    def mode(self):
+        return self.__mode
  
-    def __release_exclusive(self):
-        raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
+    def __acquire_exclusive(self, poll_ms): _NOT_IMPLEMENTED()
+    def __release_exclusive(self): _NOT_IMPLEMENTED()
+    def __acquire_concurrent(self): _NOT_IMPLEMENTED()
+    def __release_concurrent(self): _NOT_IMPLEMENTED()
  
-    def __acquire_concurrent(self):
-        raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
- 
-    def __release_concurrent(self):
-        raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
- 
-    def acquire(self, *, exclusive=None, concurrent=None, poll_ms=None):
+    def acquire(self, mode=None, *, poll_ms=None):
         """User interface for explicit acquisition. Must specify `exclusive=True` XOR `concurrent=True`. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""
-        raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
-        if exclusive and (not concurrent):
+        if mode == EXCLUSIVE:
             if poll_ms is None:
                 poll_ms = _DEFAULT_POLL_MS
             elif not isinstance(poll_ms, (int, float)):
                 msg = "argument `poll_ms` must be a numeric value"
-                raise ValueError(f"Twpl(...).acquire(exclusive=True) {msg}")
+                raise ValueError(f"Twpl(...).acquire(EXCLUSIVE) {msg}")
             return self.__acquire_exclusive(poll_ms)
-        elif concurrent and (not exclusive):
+        elif mode == CONCURRENT:
             if poll_ms is not None:
                 msg = "argument `poll_ms` must be None"
-                raise ValueError(f"Twpl(...).acquire(concurrent=True) {msg}")
+                raise ValueError(f"Twpl(...).acquire(CONCURRENT) {msg}")
             return self.__acquire_concurrent()
         else:
-            msg = "must be either exclusive or concurrent, not both or neither"
+            msg = "argument `mode` must be EXCLUSIVE or CONCURRENT"
             raise ValueError(f"Twpl(...).acquire() {msg}")
  
-    def release(self, *, exclusive=None, concurrent=None):
+    def release(self):
         """User interface for explicit release. Must specify `exclusive=True` XOR `concurrent=True`. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""
-        raise NotImplementedError(f"twpl: {_ERR_EXPLICIT_NOT_IMPLEMENTED}")
+        if self.__mode == EXCLUSIVE:
+            return self.__release_exclusive()
+        elif self.__mode == CONCURRENT:
+            return self.__release_concurrent()
  
     @contextmanager
     def exclusive(self, *, poll_ms=_DEFAULT_POLL_MS):
@@ -103,7 +110,11 @@ class Twpl():
         with FileLock(self._filename):
             while fds_exceed(self._filename, 1): # wait for all locks
                 sleep(poll_s)
-            yield self
+            try:
+                self.__mode = EXCLUSIVE
+                yield self
+            finally:
+                self.__mode = None
  
     @contextmanager
     def concurrent(self):
@@ -111,12 +122,20 @@ class Twpl():
         with FileLock(self._filename) as lock: # intercept momentarily
             with open(self._filename): # grow fd count, prevent exclusive locks
                 lock.release() # allow other concurrent locks to intercept
-                yield self
+                try:
+                    self.__mode = CONCURRENT
+                    yield self
+                finally:
+                    self.__mode = None
  
     @contextmanager
     def unconditional(self):
         """Dummy context manager that always allows operation"""
-        yield self
+        try:
+            self.__mode = UNCONDITIONAL
+            yield self
+        finally:
+            self.__mode = None
  
     def clean(self, *, min_age_ms=None):
         """Force remove lockfile if age is above `min_age_ms` regardless of state. Useful for cleaning up stale locks after crashes etc"""

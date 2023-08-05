@@ -1,2 +1,2 @@
-from .twpl import Twpl, __version__
-assert Twpl, __version__
+from .twpl import Twpl, __version__, EXCLUSIVE, CONCURRENT, UNCONDITIONAL
+assert (Twpl, __version__, EXCLUSIVE, CONCURRENT, UNCONDITIONAL)
