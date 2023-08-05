@@ -3,6 +3,7 @@ from os import path, stat, remove
 from glob import iglob
 from tempfile import NamedTemporaryFile
 from filelock import Timeout as FileLockTimeoutError, FileLock
+from threading import Lock
 from contextlib import contextmanager
 from time import sleep
 from datetime import datetime
@@ -10,7 +11,7 @@ from datetime import datetime
 
 __version__ = "0.0.2"
 
-EXCLUSIVE, CONCURRENT, UNCONDITIONAL, _DEFAULT_POLL_MS = 0, 1, 2, 100
+EXCLUSIVE, CONCURRENT, _DEFAULT_POLL_MS = 0, 1, 100
 _ERR_PROC_TEST = "test poll of /proc returned an unexpected value"
 _ERR_PLATFORM_TEST = "/proc not available and/or not a Linux/POSIX system"
 
@@ -53,16 +54,22 @@ def fds_exceed(filename, mincount): # TODO: cache /proc paths
 class Twpl():
     """Ties itself to a lockfile and provides exclusive (always singular) and concurrent (multiple in absence of exclusive) locks"""
  
-    __slots__ = "__filename", "__mode"
+    __slots__ = "__filename", "__n_exclusive", "__n_concurrent", "__countlock"
  
     def __init__(self, filename):
         """Create lock object"""
         with FileLock(filename): # let filelock.FileLock() trigger checks
-            self.__filename, self.__mode = filename, None
+            self.__filename, self.__countlock = filename, Lock()
+            self.__n_exclusive, self.__n_concurrent = 0, 0
  
     @property
     def mode(self):
-        return self.__mode
+        if self.__n_exclusive:
+            return EXCLUSIVE
+        elif self.__n_concurrent:
+            return CONCURRENT
+        else:
+            return None
  
     @property
     def filename(self):
@@ -92,9 +99,9 @@ class Twpl():
  
     def release(self):
         """User interface for explicit release. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""
-        if self.__mode == EXCLUSIVE:
+        if self.mode == EXCLUSIVE:
             return self.__release_exclusive()
-        elif self.__mode == CONCURRENT:
+        elif self.mode == CONCURRENT:
             return self.__release_concurrent()
  
     @contextmanager
@@ -105,10 +112,15 @@ class Twpl():
             while fds_exceed(self.__filename, 1): # wait for all locks
                 sleep(poll_s)
             try:
-                self.__mode = EXCLUSIVE
+                with self.__countlock:
+                    assert self.__n_exclusive == 0, "bug!"
+                    assert self.__n_concurrent == 0, "bug!"
+                    self.__n_exclusive = 1
                 yield self
             finally:
-                self.__mode = None
+                with self.__countlock:
+                    assert self.__n_exclusive == 1, "bug!"
+                    self.__n_exclusive = 0
  
     @contextmanager
     def concurrent(self):
@@ -117,19 +129,19 @@ class Twpl():
             with open(self.__filename): # grow fd count, prevent exclusive locks
                 lock.release() # allow other concurrent locks to intercept
                 try:
-                    self.__mode = CONCURRENT
+                    assert self.__n_exclusive == 0, "bug!"
+                    with self.__countlock:
+                        self.__n_concurrent += 1
                     yield self
                 finally:
-                    self.__mode = None
+                    with self.__countlock:
+                        self.__n_concurrent -= 1
+                        assert self.__n_concurrent >= 0, "bug!"
  
     @contextmanager
     def unconditional(self):
         """Dummy context manager that always allows operation"""
-        try:
-            self.__mode = UNCONDITIONAL
-            yield self
-        finally:
-            self.__mode = None
+        yield self
  
     def clean(self, *, min_age_ms):
         """Force remove lockfile if age is above `min_age_ms` regardless of state. Useful for cleaning up stale locks after crashes etc"""

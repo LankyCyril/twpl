@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from twpl import Twpl, __version__, EXCLUSIVE, CONCURRENT, UNCONDITIONAL
+from twpl import Twpl, __version__, EXCLUSIVE, CONCURRENT
 from sys import modules, stderr
 from datetime import datetime
 from contextlib import contextmanager
@@ -76,7 +76,7 @@ def basic_methods(lockfilename):
         assert lock.mode is None
     with NamedTest(f".unconditional({lockfilename!r})"):
         with Twpl(lockfilename).unconditional() as lock:
-            assert lock.mode == UNCONDITIONAL
+            assert lock.mode is None
         assert lock.mode is None
     with NamedTest(f"_NOT_IMPLEMENTED"):
         for mode in EXCLUSIVE, CONCURRENT:
@@ -84,10 +84,6 @@ def basic_methods(lockfilename):
                 Twpl(lockfilename).acquire(mode)
             except Exception as e:
                 assert isinstance(e, NotImplementedError)
-        try:
-            Twpl(lockfilename).acquire(UNCONDITIONAL)
-        except Exception as e:
-            assert isinstance(e, ValueError)
         try:
             Twpl(lockfilename).release()
         except Exception as e:
