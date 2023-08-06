@@ -1,26 +1,30 @@
 # TODO: test that _ERR_CONCURRENT_REACQUIRE happens when it needs to happen
+# TODO: more tests
+# TODO: test for stale open handles, now that it's not context-managed
+# TODO: implement timeout for acquisition
 # TODO: glob faster somehow - start from own PID?
 
 from sys import platform
 from os import path, stat, remove
-from glob import iglob
 from tempfile import NamedTemporaryFile
+from glob import iglob
 from filelock import Timeout as FileLockTimeoutError, FileLock
 from multiprocessing import Lock
 from contextlib import contextmanager
-from time import sleep
 from datetime import datetime
+from time import sleep
 
 
 __version__ = "0.1.0"
 
-EXCLUSIVE, CONCURRENT, _DEFAULT_POLL_MS = 0, 1, 100
+EXCLUSIVE, CONCURRENT = 0, 1
+
 _ERR_CONCURRENT_REACQUIRE = " ".join((
     "Explicit concurrent acquire of an already acquired Twpl instance;",
     "if you must do it, use a context manager Twpl().concurrent() instead",
 ))
 _ERR_MODE = "Twpl().acquire() argument `mode` must be EXCLUSIVE or CONCURRENT"
-_ERR_PROC_TEST = "Test poll of /proc returned an unexpected value"
+_ERR_PROC_TEST = "Test poll of /proc returned an unexpected value ({})"
 _ERR_PLATFORM_TEST = "/proc is not available and/or not a Linux/POSIX system"
 
 TwplPlatformError = type("TwplPlatformError", (OSError,), {})
@@ -35,36 +39,40 @@ def fds_exceed(filename, mincount, fdcache):
     # checking on import and having to raise exceptions right away if something
     # is wrong; and on the other, checking every time a Twpl object is created.
     if platform.startswith("linux") and path.isdir("/proc"):
-        def _fds_exceed(filename, mincount, fdcache):
-            realpath, n, fdcache_copy = path.realpath(filename), 0, set(fdcache)
-            def _iter_fds(PAT="/proc/[0-9]*/fd/*"):
-                yield from fdcache_copy
-                yield from (fd for fd in iglob(PAT) if fd not in fdcache_copy)
-            for fd in _iter_fds():
-                try:
-                    if path.realpath(fd) == realpath:
-                        fdcache.add(fd)
-                        n += 1
-                        if n > mincount:
-                            return True
-                    elif fd in fdcache:
-                        fdcache.remove(fd)
-                except FileNotFoundError:
-                    if fd in fdcache:
-                        fdcache.remove(fd)
-            else:
-                return False
-        with NamedTemporaryFile(mode="w") as t: # quick self-test
-            c = set()
-            with open(t.name):
-                if (not _fds_exceed(t.name, 1, c)) or _fds_exceed(t.name, 2, c):
-                    raise TwplPlatformError(_ERR_PROC_TEST)
+        with NamedTemporaryFile(mode="w") as tf: # self-test
+            fdc = set()
+            with open(tf.name):
+                if not _fds_exceed_POSIX(tf.name, 1, fdc):
+                    raise TwplPlatformError(_ERR_PROC_TEST.format("<2"))
+                elif _fds_exceed_POSIX(tf.name, 2, fdc):
+                    raise TwplPlatformError(_ERR_PROC_TEST.format(">2"))
                 else:
-                    _fds_exceed.__doc__ = fds_exceed.__doc__
-                    fds_exceed = _fds_exceed
-                    return _fds_exceed(filename, mincount, fdcache)
+                    _fds_exceed_POSIX.__doc__ = fds_exceed.__doc__
+                    fds_exceed = _fds_exceed_POSIX
+                    return _fds_exceed_POSIX(filename, mincount, fdcache)
     else:
         raise TwplPlatformError(_ERR_PLATFORM_TEST)
+
+
+def _fds_exceed_POSIX(filename, mincount, fdcache):
+    realpath, n, fdcache_copy = path.realpath(filename), 0, set(fdcache)
+    def _iter_fds(PAT="/proc/[0-9]*/fd/*"):
+        yield from fdcache_copy
+        yield from (fd for fd in iglob(PAT) if fd not in fdcache_copy)
+    for fd in _iter_fds():
+        try:
+            if path.realpath(fd) == realpath:
+                fdcache.add(fd)
+                n += 1
+                if n > mincount:
+                    return True
+            elif fd in fdcache:
+                fdcache.remove(fd)
+        except FileNotFoundError:
+            if fd in fdcache:
+                fdcache.remove(fd)
+    else:
+        return False
 
 
 class Twpl():
@@ -75,7 +83,7 @@ class Twpl():
         "__poll_ms", "__countlock", "__n_exclusive", "__n_concurrent",
     )
  
-    def __init__(self, filename, *, poll_ms=_DEFAULT_POLL_MS):
+    def __init__(self, filename, *, poll_ms=100):
         """Create lock object"""
         with FileLock(filename): # let filelock.FileLock() trigger checks
             self.__filename, self.__filelock = filename, FileLock(filename)
