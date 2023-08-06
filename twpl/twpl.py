@@ -1,4 +1,3 @@
-# TODO: test if threading.Lock() is usable in multiprocessing scenarios
 # TODO: implement explicit acquire/release, reuse in context managers
 # TODO: make poll_ms an object-level setting
 # TODO: adjust FileLock.acquire(poll_interval=) according to poll_ms
@@ -8,7 +7,7 @@ from os import path, stat, remove
 from glob import iglob
 from tempfile import NamedTemporaryFile
 from filelock import Timeout as FileLockTimeoutError, FileLock
-from threading import Lock
+from multiprocessing import Lock
 from contextlib import contextmanager
 from time import sleep
 from datetime import datetime
