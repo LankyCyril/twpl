@@ -1,6 +1,5 @@
 # TODO: test that _ERR_CONCURRENT_REACQUIRE happens when it needs to happen
-# TODO: make poll_ms an object-level setting
-# TODO: adjust FileLock.acquire(poll_interval=) according to poll_ms
+# TODO: glob faster somehow - start from own PID?
 
 from sys import platform
 from os import path, stat, remove
@@ -20,11 +19,13 @@ _ERR_CONCURRENT_REACQUIRE = " ".join((
     "Explicit concurrent acquire of an already acquired Twpl instance;",
     "if you must do it, use a context manager Twpl().concurrent() instead",
 ))
+_ERR_MODE = "Twpl().acquire() argument `mode` must be EXCLUSIVE or CONCURRENT"
 _ERR_PROC_TEST = "Test poll of /proc returned an unexpected value"
 _ERR_PLATFORM_TEST = "/proc is not available and/or not a Linux/POSIX system"
 
-class TwplError(RuntimeError): pass
-class TwplPlatformError(OSError): pass
+TwplPlatformError = type("TwplPlatformError", (OSError,), {})
+TwplError = type("TwplError", (RuntimeError,), {})
+TwplValueError = type("TwplValueError", (ValueError,), {})
 
 
 def fds_exceed(filename, mincount, fdcache):
@@ -71,16 +72,16 @@ class Twpl():
  
     __slots__ = (
         "__filename", "__filelock", "__fdcache", "__handles", "__last_handle",
-        "__countlock", "__n_exclusive", "__n_concurrent",
+        "__poll_ms", "__countlock", "__n_exclusive", "__n_concurrent",
     )
  
-    def __init__(self, filename):
+    def __init__(self, filename, *, poll_ms=_DEFAULT_POLL_MS):
         """Create lock object"""
         with FileLock(filename): # let filelock.FileLock() trigger checks
             self.__filename, self.__filelock = filename, FileLock(filename)
             self.__fdcache = set()
             self.__handles, self.__last_handle = set(), None
-            self.__countlock = Lock()
+            self.__poll_ms, self.__countlock = poll_ms, Lock()
             self.__n_exclusive, self.__n_concurrent = 0, 0
  
     @property
@@ -99,75 +100,14 @@ class Twpl():
     def filename(self):
         return self.__filename
  
-    @contextmanager
-    def exclusive(self, *, poll_ms=_DEFAULT_POLL_MS):
-        """Wait for all exclusive AND concurrent locks to release, acquire exclusive file lock, enter context, release this exclusive lock"""
-        try:
-            yield self.__acquire_exclusive(poll_ms)
-        finally:
-            self.__release_exclusive()
- 
-    def __acquire_exclusive(self, poll_ms):
-        poll_s = poll_ms / 1000
-        self.__filelock.acquire()
-        while fds_exceed(self.__filename, 1, self.__fdcache):
-            sleep(poll_s) # wait for all locks
-        with self.__countlock:
-            assert self.__n_exclusive == self.__n_concurrent == 0, "bug!"
-            self.__n_exclusive = 1
-        return self
- 
-    def __release_exclusive(self):
-        with self.__countlock:
-            assert self.__n_exclusive == 1, "bug!"
-            self.__n_exclusive = 0
-        self.__filelock.release()
- 
-    @contextmanager
-    def concurrent(self):
-        """Wait for all exclusive locks to release, acquire concurrent file lock, enter context, release this concurrent lock"""
-        try:
-            h = self.__acquire_concurrent(_in_context=True)
-            yield self
-        finally:
-            self.__release_concurrent(_in_context=h)
- 
-    def __acquire_concurrent(self, *, _in_context=False):
-        if (not _in_context) and (self.mode is not None):
-            raise TwplError(_ERR_CONCURRENT_REACQUIRE)
-        self.__filelock.acquire() # intercept momentarily
-        h = open(self.__filename) # grow fd count, prevent exclusive locks
-        self.__filelock.release() # allow other concurrent locks to intercept
-        with self.__countlock:
-            assert self.__n_exclusive == 0, "bug!"
-            self.__n_concurrent += 1
-            self.__handles.add(h)
-            self.__last_handle = h
-        return _in_context and h or self
- 
-    def __release_concurrent(self, *, _in_context=False):
-        with self.__countlock:
-            assert self.__n_concurrent > 0, "bug!"
-            self.__n_concurrent -= 1
-            self.__handles.remove(_in_context or self.__last_handle)
-            self.__last_handle.close() # reduce fd count
- 
     def acquire(self, mode, *, poll_ms=None):
         """User interface for explicit acquisition. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""
-        def error(*args):
-            raise ValueError("Twpl().acquire({}) {}".format(*args))
         if mode == EXCLUSIVE:
-            if poll_ms is None:
-                poll_ms = _DEFAULT_POLL_MS
-            elif not isinstance(poll_ms, (int, float)):
-                error("EXCLUSIVE", "argument `poll_ms` must be a numeric value")
             return self.__acquire_exclusive(poll_ms)
         elif mode == CONCURRENT:
-            if poll_ms is not None:
-                error("CONCURRENT", "argument `poll_ms` must be None")
-            return self.__acquire_concurrent()
+            return self.__acquire_concurrent(poll_ms)
         else:
-            error("", "argument `mode` must be EXCLUSIVE or CONCURRENT")
+            raise TwplValueError(_ERR_MODE)
  
     def release(self):
         """User interface for explicit release. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""
@@ -175,6 +115,23 @@ class Twpl():
             return self.__release_exclusive()
         elif self.mode == CONCURRENT:
             return self.__release_concurrent()
+ 
+    @contextmanager
+    def exclusive(self, *, poll_ms=None):
+        """Wait for all exclusive AND concurrent locks to release, acquire exclusive file lock, enter context, release this exclusive lock"""
+        try:
+            yield self.__acquire_exclusive(poll_ms)
+        finally:
+            self.__release_exclusive()
+ 
+    @contextmanager
+    def concurrent(self, *, poll_ms=None):
+        """Wait for all exclusive locks to release, acquire concurrent file lock, enter context, release this concurrent lock"""
+        try:
+            h = self.__acquire_concurrent(poll_ms, _in_context=True)
+            yield self
+        finally:
+            self.__release_concurrent(_in_context=h)
  
     def clean(self, *, min_age_ms):
         """Force remove lockfile if age is above `min_age_ms` regardless of state. Useful for cleaning up stale locks after crashes etc"""
@@ -194,3 +151,42 @@ class Twpl():
         except FileLockTimeoutError: # something is actively locked on, bail
             pass
         return False
+ 
+    def __acquire_exclusive(self, poll_ms):
+        poll_s = (self.__poll_ms if (poll_ms is None) else poll_ms) / 1000
+        self.__filelock.acquire(poll_interval=poll_s/3)
+        while fds_exceed(self.__filename, 1, self.__fdcache):
+            sleep(poll_s) # wait for all locks
+        with self.__countlock:
+            assert self.__n_exclusive == self.__n_concurrent == 0, "bug!"
+            self.__n_exclusive = 1
+        return self
+ 
+    def __release_exclusive(self):
+        with self.__countlock:
+            assert self.__n_exclusive == 1, "bug!"
+            self.__n_exclusive = 0
+        self.__filelock.release()
+ 
+    def __acquire_concurrent(self, poll_ms, _in_context=False):
+        if (not _in_context) and (self.mode is not None):
+            raise TwplError(_ERR_CONCURRENT_REACQUIRE)
+        poll_s = (self.__poll_ms if (poll_ms is None) else poll_ms) / 1000
+        self.__filelock.acquire(poll_interval=poll_s/3) # intercept momentarily
+        try:
+            h = open(self.__filename) # grow fd count, prevent exclusive locks
+        finally:
+            self.__filelock.release() # but allow concurrent locks to intercept
+        with self.__countlock:
+            assert self.__n_exclusive == 0, "bug!"
+            self.__n_concurrent += 1
+            self.__handles.add(h)
+            self.__last_handle = h
+        return _in_context and h or self
+ 
+    def __release_concurrent(self, _in_context=False):
+        with self.__countlock:
+            assert self.__n_concurrent > 0, "bug!"
+            self.__n_concurrent -= 1
+            self.__handles.remove(_in_context or self.__last_handle)
+            self.__last_handle.close() # reduce fd count
