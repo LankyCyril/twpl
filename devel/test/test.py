@@ -11,6 +11,9 @@ print(f"Loaded from {modules['twpl'].__file__}")
 print(f"{__version__=}")
 
 
+_SLEEP_FACTOR = .1
+
+
 def ts():
     return datetime.now().timestamp()
 
@@ -38,7 +41,7 @@ def await_daemons(*daemon_param_tuples):
 
 
 def Reader(lockfilename, name, delay, duration, enter_order, leave_order):
-    delay, duration = delay / 10, duration / 10
+    delay, duration = delay * _SLEEP_FACTOR, duration * _SLEEP_FACTOR
     pfx = f"{'|':>14} Reader {name}"
     print(f"{pfx} will idle for {delay} seconds", flush=True)
     sleep(delay)
@@ -52,7 +55,7 @@ def Reader(lockfilename, name, delay, duration, enter_order, leave_order):
 
 
 def Writer(lockfilename, name, delay, duration, enter_order, leave_order):
-    delay, duration = delay / 10, duration / 10
+    delay, duration = delay * _SLEEP_FACTOR, duration * _SLEEP_FACTOR
     pfx = f"{'|':>14} Writer {name}"
     print(f"{pfx} will idle for {delay} seconds", flush=True)
     sleep(delay)
@@ -96,10 +99,10 @@ def readers_writer_readers(lockfilename):
         enter_order, leave_order = [], []
         await_daemons(
             (Reader, lockfilename, "R1", 0,  4, enter_order, leave_order),
-            (Reader, lockfilename, "R2", 1,  1, enter_order, leave_order),
+            (Reader, lockfilename, "R2", 1,  2, enter_order, leave_order),
             (Writer, lockfilename, "W1", .2, 2, enter_order, leave_order),
-            (Reader, lockfilename, "R3", 5,  2, enter_order, leave_order),
-            (Reader, lockfilename, "R4", 5,  3, enter_order, leave_order),
+            (Reader, lockfilename, "R3", 5,  4, enter_order, leave_order),
+            (Reader, lockfilename, "R4", 5,  6, enter_order, leave_order),
         )
         Twpl(lockfilename).clean(min_age_ms=0)
         assert enter_order[:2] == ["R1", "W1"]
