@@ -1,3 +1,8 @@
+# TODO: test if threading.Lock() is usable in multiprocessing scenarios
+# TODO: implement explicit acquire/release, reuse in context managers
+# TODO: make poll_ms an object-level setting
+# TODO: adjust FileLock.acquire(poll_interval=) according to poll_ms
+
 from sys import platform
 from os import path, stat, remove
 from glob import iglob
@@ -9,7 +14,7 @@ from time import sleep
 from datetime import datetime
 
 
-__version__ = "0.0.2"
+__version__ = "0.1.0"
 
 EXCLUSIVE, CONCURRENT, _DEFAULT_POLL_MS = 0, 1, 100
 _ERR_PROC_TEST = "test poll of /proc returned an unexpected value"
@@ -32,10 +37,9 @@ def fds_exceed(filename, mincount, fdcache):
     if platform.startswith("linux") and path.isdir("/proc"):
         def _fds_exceed(filename, mincount, fdcache):
             realpath, n, fdcache_copy = path.realpath(filename), 0, set(fdcache)
-            def _iter_fds():
-                fds = iglob("/proc/[0-9]*/fd/*")
+            def _iter_fds(PAT="/proc/[0-9]*/fd/*"):
                 yield from fdcache_copy
-                yield from (fd for fd in fds if fd not in fdcache_copy)
+                yield from (fd for fd in iglob(PAT) if fd not in fdcache_copy)
             for fd in _iter_fds():
                 try:
                     if path.realpath(fd) == realpath:
@@ -46,7 +50,8 @@ def fds_exceed(filename, mincount, fdcache):
                     elif fd in fdcache:
                         fdcache.remove(fd)
                 except FileNotFoundError:
-                    (fd in fdcache) and fdcache.remove(fd)
+                    if fd in fdcache:
+                        fdcache.remove(fd)
             else:
                 return False
         with NamedTemporaryFile(mode="w") as t: # quick self-test
