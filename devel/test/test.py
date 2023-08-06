@@ -86,10 +86,14 @@ def basic_methods(lockfilename):
                 Twpl(lockfilename).acquire(mode)
             except Exception as e:
                 assert isinstance(e, NotImplementedError)
+            else:
+                raise ValueError("Already implemented")
         try:
             Twpl(lockfilename).release()
         except Exception as e:
             assert isinstance(e, NotImplementedError)
+        else:
+            raise ValueError("Already implemented")
     with NamedTest(f".clean({lockfilename!r})"):
         assert not Twpl(lockfilename).clean(min_age_ms=60000)
         assert path.isfile(lockfilename)

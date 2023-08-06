@@ -1,4 +1,4 @@
-# TODO: implement explicit acquire/release, reuse in context managers
+# TODO: test that _ERR_CONCURRENT_REACQUIRE happens when it needs to happen
 # TODO: make poll_ms an object-level setting
 # TODO: adjust FileLock.acquire(poll_interval=) according to poll_ms
 
@@ -16,15 +16,15 @@ from datetime import datetime
 __version__ = "0.1.0"
 
 EXCLUSIVE, CONCURRENT, _DEFAULT_POLL_MS = 0, 1, 100
-_ERR_PROC_TEST = "test poll of /proc returned an unexpected value"
-_ERR_PLATFORM_TEST = "/proc not available and/or not a Linux/POSIX system"
+_ERR_CONCURRENT_REACQUIRE = " ".join((
+    "Explicit concurrent acquire of an already acquired Twpl instance;",
+    "if you must do it, use a context manager Twpl().concurrent() instead",
+))
+_ERR_PROC_TEST = "Test poll of /proc returned an unexpected value"
+_ERR_PLATFORM_TEST = "/proc is not available and/or not a Linux/POSIX system"
 
-
-def _NOT_IMPLEMENTED():
-    raise NotImplementedError((
-        "twpl: explicit acquire/release methods are not implemented yet; use "
-        "context managers Twpl().exclusive() and Twpl().concurrent() instead"
-    ))
+class TwplError(RuntimeError): pass
+class TwplPlatformError(OSError): pass
 
 
 def fds_exceed(filename, mincount, fdcache):
@@ -57,28 +57,30 @@ def fds_exceed(filename, mincount, fdcache):
             c = set()
             with open(t.name):
                 if (not _fds_exceed(t.name, 1, c)) or _fds_exceed(t.name, 2, c):
-                    raise OSError(f"twpl: {_ERR_PROC_TEST}")
+                    raise TwplPlatformError(_ERR_PROC_TEST)
                 else:
                     _fds_exceed.__doc__ = fds_exceed.__doc__
                     fds_exceed = _fds_exceed
                     return _fds_exceed(filename, mincount, fdcache)
     else:
-        raise OSError(f"twpl: {_ERR_PLATFORM_TEST}")
+        raise TwplPlatformError(_ERR_PLATFORM_TEST)
 
 
 class Twpl():
     """Ties itself to a lockfile and provides exclusive (always singular) and concurrent (multiple in absence of exclusive) locks"""
  
     __slots__ = (
-        "__filename", "__countlock", "__fdcache",
-        "__n_exclusive", "__n_concurrent",
+        "__filename", "__filelock", "__fdcache", "__handles", "__last_handle",
+        "__countlock", "__n_exclusive", "__n_concurrent",
     )
  
     def __init__(self, filename):
         """Create lock object"""
         with FileLock(filename): # let filelock.FileLock() trigger checks
-            self.__filename, self.__countlock = filename, Lock()
+            self.__filename, self.__filelock = filename, FileLock(filename)
             self.__fdcache = set()
+            self.__handles, self.__last_handle = set(), None
+            self.__countlock = Lock()
             self.__n_exclusive, self.__n_concurrent = 0, 0
  
     @property
@@ -97,10 +99,58 @@ class Twpl():
     def filename(self):
         return self.__filename
  
-    def __acquire_exclusive(self, poll_ms): _NOT_IMPLEMENTED()
-    def __release_exclusive(self): _NOT_IMPLEMENTED()
-    def __acquire_concurrent(self): _NOT_IMPLEMENTED()
-    def __release_concurrent(self): _NOT_IMPLEMENTED()
+    @contextmanager
+    def exclusive(self, *, poll_ms=_DEFAULT_POLL_MS):
+        """Wait for all exclusive AND concurrent locks to release, acquire exclusive file lock, enter context, release this exclusive lock"""
+        try:
+            yield self.__acquire_exclusive(poll_ms)
+        finally:
+            self.__release_exclusive()
+ 
+    def __acquire_exclusive(self, poll_ms):
+        poll_s = poll_ms / 1000
+        self.__filelock.acquire()
+        while fds_exceed(self.__filename, 1, self.__fdcache):
+            sleep(poll_s) # wait for all locks
+        with self.__countlock:
+            assert self.__n_exclusive == self.__n_concurrent == 0, "bug!"
+            self.__n_exclusive = 1
+        return self
+ 
+    def __release_exclusive(self):
+        with self.__countlock:
+            assert self.__n_exclusive == 1, "bug!"
+            self.__n_exclusive = 0
+        self.__filelock.release()
+ 
+    @contextmanager
+    def concurrent(self):
+        """Wait for all exclusive locks to release, acquire concurrent file lock, enter context, release this concurrent lock"""
+        try:
+            h = self.__acquire_concurrent(_in_context=True)
+            yield self
+        finally:
+            self.__release_concurrent(_in_context=h)
+ 
+    def __acquire_concurrent(self, *, _in_context=False):
+        if (not _in_context) and (self.mode is not None):
+            raise TwplError(_ERR_CONCURRENT_REACQUIRE)
+        self.__filelock.acquire() # intercept momentarily
+        h = open(self.__filename) # grow fd count, prevent exclusive locks
+        self.__filelock.release() # allow other concurrent locks to intercept
+        with self.__countlock:
+            assert self.__n_exclusive == 0, "bug!"
+            self.__n_concurrent += 1
+            self.__handles.add(h)
+            self.__last_handle = h
+        return _in_context and h or self
+ 
+    def __release_concurrent(self, *, _in_context=False):
+        with self.__countlock:
+            assert self.__n_concurrent > 0, "bug!"
+            self.__n_concurrent -= 1
+            self.__handles.remove(_in_context or self.__last_handle)
+            self.__last_handle.close() # reduce fd count
  
     def acquire(self, mode, *, poll_ms=None):
         """User interface for explicit acquisition. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""
@@ -125,41 +175,6 @@ class Twpl():
             return self.__release_exclusive()
         elif self.mode == CONCURRENT:
             return self.__release_concurrent()
- 
-    @contextmanager
-    def exclusive(self, *, poll_ms=_DEFAULT_POLL_MS):
-        """Wait for all exclusive AND concurrent locks to release, acquire exclusive file lock, enter context, release this exclusive lock"""
-        poll_s = poll_ms / 1000
-        with FileLock(self.__filename):
-            while fds_exceed(self.__filename, 1, self.__fdcache):
-                # wait for all locks
-                sleep(poll_s)
-            try:
-                with self.__countlock:
-                    assert self.__n_exclusive == 0, "bug!"
-                    assert self.__n_concurrent == 0, "bug!"
-                    self.__n_exclusive = 1
-                yield self
-            finally:
-                with self.__countlock:
-                    assert self.__n_exclusive == 1, "bug!"
-                    self.__n_exclusive = 0
- 
-    @contextmanager
-    def concurrent(self):
-        """Wait for all exclusive locks to release, acquire concurrent file lock, enter context, release this concurrent lock"""
-        with FileLock(self.__filename) as lock: # intercept momentarily
-            with open(self.__filename): # grow fd count, prevent exclusive locks
-                lock.release() # allow other concurrent locks to intercept
-                try:
-                    with self.__countlock:
-                        assert self.__n_exclusive == 0, "bug!"
-                        self.__n_concurrent += 1
-                    yield self
-                finally:
-                    with self.__countlock:
-                        self.__n_concurrent -= 1
-                        assert self.__n_concurrent >= 0, "bug!"
  
     def clean(self, *, min_age_ms):
         """Force remove lockfile if age is above `min_age_ms` regardless of state. Useful for cleaning up stale locks after crashes etc"""
