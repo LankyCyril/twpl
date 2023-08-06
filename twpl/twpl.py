@@ -23,30 +23,41 @@ def _NOT_IMPLEMENTED():
     ))
 
 
-def fds_exceed(filename, mincount): # TODO: cache /proc paths
+def fds_exceed(filename, mincount, fdcache):
     """Check if number of open file descriptors for `filename` exceeds `mincount`"""
     global fds_exceed
     # fds_exceed bootstraps itself on first call; this avoids, on the one hand,
     # checking on import and having to raise exceptions right away if something
     # is wrong; and on the other, checking every time a Twpl object is created.
     if platform.startswith("linux") and path.isdir("/proc"):
-        def _fds_exceed(filename, mincount):
-            realpath, n = path.realpath(filename), 0
-            for fd in iglob("/proc/[0-9]*/fd/*"):
-                if path.realpath(fd) == realpath:
-                    n += 1
-                    if n > mincount:
-                        return True
+        def _fds_exceed(filename, mincount, fdcache):
+            realpath, n, fdcache_copy = path.realpath(filename), 0, set(fdcache)
+            def _iter_fds():
+                fds = iglob("/proc/[0-9]*/fd/*")
+                yield from fdcache_copy
+                yield from (fd for fd in fds if fd not in fdcache_copy)
+            for fd in _iter_fds():
+                try:
+                    if path.realpath(fd) == realpath:
+                        fdcache.add(fd)
+                        n += 1
+                        if n > mincount:
+                            return True
+                    elif fd in fdcache:
+                        fdcache.remove(fd)
+                except FileNotFoundError:
+                    (fd in fdcache) and fdcache.remove(fd)
             else:
                 return False
-        with NamedTemporaryFile(mode="w") as tf: # quick self-test
-            with open(tf.name):
-                if (not _fds_exceed(tf.name, 1)) or _fds_exceed(tf.name, 2):
+        with NamedTemporaryFile(mode="w") as t: # quick self-test
+            c = set()
+            with open(t.name):
+                if (not _fds_exceed(t.name, 1, c)) or _fds_exceed(t.name, 2, c):
                     raise OSError(f"twpl: {_ERR_PROC_TEST}")
                 else:
                     _fds_exceed.__doc__ = fds_exceed.__doc__
                     fds_exceed = _fds_exceed
-                    return _fds_exceed(filename, mincount)
+                    return _fds_exceed(filename, mincount, fdcache)
     else:
         raise OSError(f"twpl: {_ERR_PLATFORM_TEST}")
 
@@ -54,22 +65,29 @@ def fds_exceed(filename, mincount): # TODO: cache /proc paths
 class Twpl():
     """Ties itself to a lockfile and provides exclusive (always singular) and concurrent (multiple in absence of exclusive) locks"""
  
-    __slots__ = "__filename", "__n_exclusive", "__n_concurrent", "__countlock"
+    __slots__ = (
+        "__filename", "__countlock", "__fdcache",
+        "__n_exclusive", "__n_concurrent",
+    )
  
     def __init__(self, filename):
         """Create lock object"""
         with FileLock(filename): # let filelock.FileLock() trigger checks
             self.__filename, self.__countlock = filename, Lock()
+            self.__fdcache = set()
             self.__n_exclusive, self.__n_concurrent = 0, 0
  
     @property
     def mode(self):
-        if self.__n_exclusive:
-            return EXCLUSIVE
-        elif self.__n_concurrent:
-            return CONCURRENT
-        else:
-            return None
+        with self.__countlock:
+            if self.__n_exclusive:
+                assert self.__n_concurrent == 0, "bug!"
+                return EXCLUSIVE
+            elif self.__n_concurrent:
+                assert self.__n_exclusive == 0, "bug!"
+                return CONCURRENT
+            else:
+                return None
  
     @property
     def filename(self):
@@ -109,7 +127,8 @@ class Twpl():
         """Wait for all exclusive AND concurrent locks to release, acquire exclusive file lock, enter context, release this exclusive lock"""
         poll_s = poll_ms / 1000
         with FileLock(self.__filename):
-            while fds_exceed(self.__filename, 1): # wait for all locks
+            while fds_exceed(self.__filename, 1, self.__fdcache):
+                # wait for all locks
                 sleep(poll_s)
             try:
                 with self.__countlock:
@@ -141,17 +160,18 @@ class Twpl():
     def clean(self, *, min_age_ms):
         """Force remove lockfile if age is above `min_age_ms` regardless of state. Useful for cleaning up stale locks after crashes etc"""
         try:
-            with FileLock(self.__filename, timeout=0): # no exclusive locks now
-                if not fds_exceed(self.__filename, 1): # no concurrent locks;
-                    # new locks (either exclusive or concurrent) will not be
-                    # able to intercept while FileLock is locked on! Thus, here
-                    # we can be certain we would be removing an unused lockfile.
+            with FileLock(self.__filename, timeout=0): # no exclusive locks now,
+                if not fds_exceed(self.__filename, 1, self.__fdcache): # and ...
+                    # ... no concurrent locks. New locks (either exclusive or
+                    # concurrent) will not be able to intercept while FileLock
+                    # is locked on! Thus, here we can be certain we would be
+                    # removing an unused lockfile.
                     st_ctime = stat(self.__filename).st_ctime
                     dt = datetime.now() - datetime.fromtimestamp(st_ctime)
                     lock_age_ms = dt.total_seconds()*1000 + dt.microseconds/1000
                     if lock_age_ms >= min_age_ms:
                         remove(self.__filename)
                         return True
-        except FileLockTimeoutError: # something is currently locked on
+        except FileLockTimeoutError: # something is actively locked on, bail
             pass
         return False

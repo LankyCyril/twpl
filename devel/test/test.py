@@ -108,6 +108,22 @@ def readers(lockfilename):
         assert (ts() - start_ts) < 10 * _SLEEP_FACTOR
 
 
+def nested_readers(lockfilename):
+    with NamedTest(f"nested_readers({lockfilename!r})"):
+        lock = Twpl(lockfilename)
+        writer = Thread(target=Writer, args=(lockfilename, "Wx", 1, 2, [], []))
+        writer.start()
+        with lock.concurrent():
+            with lock.concurrent():
+                with lock.concurrent():
+                    with lock.concurrent():
+                        with lock.concurrent():
+                            print(f"{'|':>14} 5 concurrent readers", flush=True)
+                            print(f"{'|':>14} {lock.mode=}", flush=True)
+        writer.join()
+        Twpl(lockfilename).clean(min_age_ms=0)
+
+
 def writers(lockfilename):
     with NamedTest(f"writers({lockfilename!r})"):
         enter_order, leave_order = [], []
@@ -136,5 +152,6 @@ def readers_writer_readers(lockfilename):
 if __name__ == "__main__":
     basic_methods("devel/test/basic.lockfile")
     readers("devel/test/readers.lockfile")
+    nested_readers("devel/test/nested_readers.lockfile")
     writers("devel/test/writers.lockfile")
     readers_writer_readers("devel/test/rs_w_rs.lockfile")
