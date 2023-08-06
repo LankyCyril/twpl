@@ -1,2 +1,3 @@
 __pycache__
 devel/test/*.lockfile
+devel/sandbox
