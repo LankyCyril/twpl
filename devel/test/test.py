@@ -20,14 +20,17 @@ def ts():
 
 @contextmanager
 def NamedTest(name):
+    start_ts = ts()
     print(f"TEST STARTED | {name}", file=stderr)
     try:
         yield
     except:
         print(f"{'FAIL!':>12} | {name}", file=stderr)
+        print(f"{'`':>14} in {ts()-start_ts}", file=stderr)
         raise
     else:
         print(f"{'SUCCESS':>12} | {name}", file=stderr)
+        print(f"{'`':>14} in {ts()-start_ts}", file=stderr)
 
 
 def await_daemons(*daemon_param_tuples):
@@ -94,6 +97,28 @@ def basic_methods(lockfilename):
         assert not path.exists(lockfilename)
 
 
+def readers(lockfilename):
+    with NamedTest(f"readers({lockfilename!r})"):
+        start_ts, dummy = ts(), []
+        await_daemons(*(
+            (Reader, lockfilename, reader_name, 0, 5, dummy, dummy)
+            for reader_name in ("R1", "R2", "R3", "R4", "R5")
+        ))
+        Twpl(lockfilename).clean(min_age_ms=0)
+        assert (ts() - start_ts) < 10 * _SLEEP_FACTOR
+
+
+def writers(lockfilename):
+    with NamedTest(f"writers({lockfilename!r})"):
+        enter_order, leave_order = [], []
+        await_daemons(*(
+            (Writer, lockfilename, writer_name, 0, 2, enter_order, leave_order)
+            for writer_name in (f"W{i}" for i in range(1, 10))
+        ))
+        Twpl(lockfilename).clean(min_age_ms=0)
+        assert enter_order == leave_order
+
+
 def readers_writer_readers(lockfilename):
     with NamedTest(f"readers_writer_readers({lockfilename!r})"):
         enter_order, leave_order = [], []
@@ -110,4 +135,6 @@ def readers_writer_readers(lockfilename):
 
 if __name__ == "__main__":
     basic_methods("devel/test/basic.lockfile")
+    readers("devel/test/readers.lockfile")
+    writers("devel/test/writers.lockfile")
     readers_writer_readers("devel/test/rs_w_rs.lockfile")
