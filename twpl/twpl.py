@@ -79,7 +79,7 @@ class Twpl():
     """Ties itself to a lockfile and provides exclusive (always singular) and concurrent (multiple in absence of exclusive) locks"""
  
     __slots__ = (
-        "__filename", "__filelock", "__fdcache", "__handles", "__last_handle",
+        "__filename", "__filelock", "__fdcache", "__handles",
         "__poll_ms", "__countlock", "__n_exclusive", "__n_concurrent",
     )
  
@@ -87,8 +87,7 @@ class Twpl():
         """Create lock object"""
         with FileLock(filename): # let filelock.FileLock() trigger checks
             self.__filename, self.__filelock = filename, FileLock(filename)
-            self.__fdcache = set()
-            self.__handles, self.__last_handle = set(), None
+            self.__fdcache, self.__handles = set(), []
             self.__poll_ms, self.__countlock = poll_ms, Lock()
             self.__n_exclusive, self.__n_concurrent = 0, 0
  
@@ -136,10 +135,9 @@ class Twpl():
     def concurrent(self, *, poll_ms=None):
         """Wait for all exclusive locks to release, acquire concurrent file lock, enter context, release this concurrent lock"""
         try:
-            h = self.__acquire_concurrent(poll_ms, _in_context=True)
-            yield self
+            yield self.__acquire_concurrent(poll_ms)
         finally:
-            self.__release_concurrent(_in_context=h)
+            self.__release_concurrent()
  
     def clean(self, *, min_age_ms):
         """Force remove lockfile if age is above `min_age_ms` regardless of state. Useful for cleaning up stale locks after crashes etc"""
@@ -176,9 +174,7 @@ class Twpl():
             self.__n_exclusive = 0
         self.__filelock.release()
  
-    def __acquire_concurrent(self, poll_ms, _in_context=False):
-        if (not _in_context) and (self.mode is not None):
-            raise TwplError(_ERR_CONCURRENT_REACQUIRE)
+    def __acquire_concurrent(self, poll_ms):
         poll_s = (self.__poll_ms if (poll_ms is None) else poll_ms) / 1000
         self.__filelock.acquire(poll_interval=poll_s/3) # intercept momentarily
         try:
@@ -188,13 +184,12 @@ class Twpl():
         with self.__countlock:
             assert self.__n_exclusive == 0, "bug!"
             self.__n_concurrent += 1
-            self.__handles.add(h)
-            self.__last_handle = h
-        return _in_context and h or self
+            self.__handles.append(h)
+        return self
  
-    def __release_concurrent(self, _in_context=False):
+    def __release_concurrent(self):
         with self.__countlock:
             assert self.__n_concurrent > 0, "bug!"
+            assert self.__handles, "bug!"
             self.__n_concurrent -= 1
-            self.__handles.remove(_in_context or self.__last_handle)
-            self.__last_handle.close() # reduce fd count
+            self.__handles.pop().close() # reduce fd count
