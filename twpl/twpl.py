@@ -1,30 +1,33 @@
-# TODO: implement explicit acquire/release, reuse in context managers
-# TODO: make poll_ms an object-level setting
-# TODO: adjust FileLock.acquire(poll_interval=) according to poll_ms
+# TODO: more tests
+# TODO: implement timeout for acquisition
+# TODO: glob faster somehow - start from own PID?
 
 from sys import platform
 from os import path, stat, remove
-from glob import iglob
 from tempfile import NamedTemporaryFile
+from glob import iglob
 from filelock import Timeout as FileLockTimeoutError, FileLock
 from multiprocessing import Lock
+from types import SimpleNamespace
 from contextlib import contextmanager
-from time import sleep
 from datetime import datetime
+from time import sleep
 
 
 __version__ = "0.1.0"
 
-EXCLUSIVE, CONCURRENT, _DEFAULT_POLL_MS = 0, 1, 100
-_ERR_PROC_TEST = "test poll of /proc returned an unexpected value"
-_ERR_PLATFORM_TEST = "/proc not available and/or not a Linux/POSIX system"
+EXCLUSIVE, CONCURRENT = 1, 2
 
-
-def _NOT_IMPLEMENTED():
-    raise NotImplementedError((
-        "twpl: explicit acquire/release methods are not implemented yet; use "
-        "context managers Twpl().exclusive() and Twpl().concurrent() instead"
-    ))
+TwplPlatformError = type("TwplPlatformError", (OSError,), {})
+TwplValueError = type("TwplValueError", (ValueError,), {})
+_ERR_MODE = "Twpl().acquire() argument `mode` must be EXCLUSIVE or CONCURRENT"
+_ERR_PROC_TEST = "Test poll of /proc returned an unexpected value ({})"
+_ERR_PLATFORM_TEST = "/proc is not available and/or not a Linux/POSIX system"
+_BUGASS = " ".join((
+    "twpl got itself into a broken condition at runtime. Please report this at",
+    "https://github.com/LankyCyril/twpl/issues and provide a minimal example",
+    "that replicates this along with the assertion that failed.",
+))
 
 
 def fds_exceed(filename, mincount, fdcache):
@@ -34,90 +37,90 @@ def fds_exceed(filename, mincount, fdcache):
     # checking on import and having to raise exceptions right away if something
     # is wrong; and on the other, checking every time a Twpl object is created.
     if platform.startswith("linux") and path.isdir("/proc"):
-        def _fds_exceed(filename, mincount, fdcache):
-            realpath, n, fdcache_copy = path.realpath(filename), 0, set(fdcache)
-            def _iter_fds(PAT="/proc/[0-9]*/fd/*"):
-                yield from fdcache_copy
-                yield from (fd for fd in iglob(PAT) if fd not in fdcache_copy)
-            for fd in _iter_fds():
-                try:
-                    if path.realpath(fd) == realpath:
-                        fdcache.add(fd)
-                        n += 1
-                        if n > mincount:
-                            return True
-                    elif fd in fdcache:
-                        fdcache.remove(fd)
-                except FileNotFoundError:
-                    if fd in fdcache:
-                        fdcache.remove(fd)
-            else:
-                return False
-        with NamedTemporaryFile(mode="w") as t: # quick self-test
-            c = set()
-            with open(t.name):
-                if (not _fds_exceed(t.name, 1, c)) or _fds_exceed(t.name, 2, c):
-                    raise OSError(f"twpl: {_ERR_PROC_TEST}")
+        with NamedTemporaryFile(mode="w") as tf: # self-test
+            fdc = set()
+            with open(tf.name):
+                if not _fds_exceed_POSIX(tf.name, 1, fdc):
+                    raise TwplPlatformError(_ERR_PROC_TEST.format("<2"))
+                elif _fds_exceed_POSIX(tf.name, 2, fdc):
+                    raise TwplPlatformError(_ERR_PROC_TEST.format(">2"))
                 else:
-                    _fds_exceed.__doc__ = fds_exceed.__doc__
-                    fds_exceed = _fds_exceed
-                    return _fds_exceed(filename, mincount, fdcache)
+                    _fds_exceed_POSIX.__doc__ = fds_exceed.__doc__
+                    fds_exceed = _fds_exceed_POSIX
+                    return _fds_exceed_POSIX(filename, mincount, fdcache)
     else:
-        raise OSError(f"twpl: {_ERR_PLATFORM_TEST}")
+        raise TwplPlatformError(_ERR_PLATFORM_TEST)
+
+
+def _fds_exceed_POSIX(filename, mincount, fdcache):
+    realpath, n, fdcache_copy = path.realpath(filename), 0, set(fdcache)
+    def _iter_fds(PAT="/proc/[0-9]*/fd/*"):
+        yield from fdcache_copy
+        yield from (fd for fd in iglob(PAT) if fd not in fdcache_copy)
+    for fd in _iter_fds():
+        try:
+            if path.realpath(fd) == realpath:
+                fdcache.add(fd)
+                n += 1
+                if n > mincount:
+                    return True
+            elif fd in fdcache:
+                fdcache.remove(fd)
+        except FileNotFoundError:
+            if fd in fdcache:
+                fdcache.remove(fd)
+    else:
+        return False
 
 
 class Twpl():
     """Ties itself to a lockfile and provides exclusive (always singular) and concurrent (multiple in absence of exclusive) locks"""
  
     __slots__ = (
-        "__filename", "__countlock", "__fdcache",
-        "__n_exclusive", "__n_concurrent",
+        "__filename", "__filelock", "__poll_ms",
+        "__fdcache", "__countlock", "__handles", "__is_locked_exclusively",
     )
  
-    def __init__(self, filename):
+    def __init__(self, filename, *, poll_ms=100):
         """Create lock object"""
         with FileLock(filename): # let filelock.FileLock() trigger checks
-            self.__filename, self.__countlock = filename, Lock()
-            self.__fdcache = set()
-            self.__n_exclusive, self.__n_concurrent = 0, 0
- 
-    @property
-    def mode(self):
-        with self.__countlock:
-            if self.__n_exclusive:
-                assert self.__n_concurrent == 0, "bug!"
-                return EXCLUSIVE
-            elif self.__n_concurrent:
-                assert self.__n_exclusive == 0, "bug!"
-                return CONCURRENT
-            else:
-                return None
+            self.__filename, self.__filelock = filename, FileLock(filename)
+            self.__poll_ms, self.__fdcache = poll_ms, set()
+            self.__countlock, self.__handles = Lock(), []
+            self.__is_locked_exclusively = False
  
     @property
     def filename(self):
         return self.__filename
  
-    def __acquire_exclusive(self, poll_ms): _NOT_IMPLEMENTED()
-    def __release_exclusive(self): _NOT_IMPLEMENTED()
-    def __acquire_concurrent(self): _NOT_IMPLEMENTED()
-    def __release_concurrent(self): _NOT_IMPLEMENTED()
+    @property
+    def mode(self):
+        with self.__countlock:
+            if self.__is_locked_exclusively:
+                assert not self.__handles, _BUGASS
+                return EXCLUSIVE
+            elif self.__handles:
+                assert not self.__is_locked_exclusively, _BUGASS
+                return CONCURRENT
+            else:
+                return None
+ 
+    @property
+    def state(self):
+        return SimpleNamespace(
+            mode=self.mode,
+            exclusive=self.__is_locked_exclusively,
+            concurrent=len(self.__handles),
+        )
  
     def acquire(self, mode, *, poll_ms=None):
         """User interface for explicit acquisition. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""
-        def error(*args):
-            raise ValueError("Twpl().acquire({}) {}".format(*args))
         if mode == EXCLUSIVE:
-            if poll_ms is None:
-                poll_ms = _DEFAULT_POLL_MS
-            elif not isinstance(poll_ms, (int, float)):
-                error("EXCLUSIVE", "argument `poll_ms` must be a numeric value")
             return self.__acquire_exclusive(poll_ms)
         elif mode == CONCURRENT:
-            if poll_ms is not None:
-                error("CONCURRENT", "argument `poll_ms` must be None")
-            return self.__acquire_concurrent()
+            return self.__acquire_concurrent(poll_ms)
         else:
-            error("", "argument `mode` must be EXCLUSIVE or CONCURRENT")
+            raise TwplValueError(_ERR_MODE)
  
     def release(self):
         """User interface for explicit release. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""
@@ -125,41 +128,24 @@ class Twpl():
             return self.__release_exclusive()
         elif self.mode == CONCURRENT:
             return self.__release_concurrent()
+        else:
+            return self
  
     @contextmanager
-    def exclusive(self, *, poll_ms=_DEFAULT_POLL_MS):
+    def exclusive(self, *, poll_ms=None):
         """Wait for all exclusive AND concurrent locks to release, acquire exclusive file lock, enter context, release this exclusive lock"""
-        poll_s = poll_ms / 1000
-        with FileLock(self.__filename):
-            while fds_exceed(self.__filename, 1, self.__fdcache):
-                # wait for all locks
-                sleep(poll_s)
-            try:
-                with self.__countlock:
-                    assert self.__n_exclusive == 0, "bug!"
-                    assert self.__n_concurrent == 0, "bug!"
-                    self.__n_exclusive = 1
-                yield self
-            finally:
-                with self.__countlock:
-                    assert self.__n_exclusive == 1, "bug!"
-                    self.__n_exclusive = 0
+        try:
+            yield self.__acquire_exclusive(poll_ms)
+        finally:
+            self.__release_exclusive()
  
     @contextmanager
-    def concurrent(self):
+    def concurrent(self, *, poll_ms=None):
         """Wait for all exclusive locks to release, acquire concurrent file lock, enter context, release this concurrent lock"""
-        with FileLock(self.__filename) as lock: # intercept momentarily
-            with open(self.__filename): # grow fd count, prevent exclusive locks
-                lock.release() # allow other concurrent locks to intercept
-                try:
-                    with self.__countlock:
-                        assert self.__n_exclusive == 0, "bug!"
-                        self.__n_concurrent += 1
-                    yield self
-                finally:
-                    with self.__countlock:
-                        self.__n_concurrent -= 1
-                        assert self.__n_concurrent >= 0, "bug!"
+        try:
+            yield self.__acquire_concurrent(poll_ms)
+        finally:
+            self.__release_concurrent()
  
     def clean(self, *, min_age_ms):
         """Force remove lockfile if age is above `min_age_ms` regardless of state. Useful for cleaning up stale locks after crashes etc"""
@@ -179,3 +165,46 @@ class Twpl():
         except FileLockTimeoutError: # something is actively locked on, bail
             pass
         return False
+ 
+    def __acquire_exclusive(self, poll_ms):
+        poll_s = (self.__poll_ms if (poll_ms is None) else poll_ms) / 1000
+        self.__filelock.acquire(poll_interval=poll_s/3)
+        while fds_exceed(self.__filename, 1, self.__fdcache):
+            sleep(poll_s) # wait for all locks
+        with self.__countlock:
+            assert not (self.__is_locked_exclusively or self.__handles), _BUGASS
+            self.__is_locked_exclusively = True
+        return self
+ 
+    def __release_exclusive(self):
+        with self.__countlock:
+            assert self.__is_locked_exclusively, _BUGASS
+            self.__is_locked_exclusively = False
+            self.__filelock.release()
+            return self
+ 
+    def __acquire_concurrent(self, poll_ms):
+        poll_s = (self.__poll_ms if (poll_ms is None) else poll_ms) / 1000
+        self.__filelock.acquire(poll_interval=poll_s/3) # intercept momentarily
+        try:
+            h = open(self.__filename) # grow fd count, prevent exclusive locks
+        finally:
+            self.__filelock.release() # but allow concurrent locks to intercept
+        with self.__countlock:
+            assert not self.__is_locked_exclusively, _BUGASS
+            self.__handles.append(h)
+        return self
+ 
+    def __release_concurrent(self):
+        with self.__countlock:
+            assert self.__handles, _BUGASS
+            self.__handles.pop().close() # reduce fd count
+            return self
+ 
+    def __del__(self):
+        with self.__countlock:
+            if self.__is_locked_exclusively:
+                self.__is_locked_exclusively = False
+                self.__filelock.release()
+            while self.__handles:
+                self.__handles.pop().close()

@@ -11,7 +11,7 @@ print(f"Loaded from {modules['twpl'].__file__}")
 print(f"{__version__=}")
 
 
-_SLEEP_FACTOR = .1
+_SLEEP_FACTOR = .05
 
 
 def ts():
@@ -49,7 +49,7 @@ def Reader(lockfilename, name, delay, duration, enter_order, leave_order):
     print(f"{pfx} will idle for {delay} seconds", flush=True)
     sleep(delay)
     print(f"{pfx} will be reading for {duration} seconds", flush=True)
-    with Twpl(lockfilename).concurrent():
+    with Twpl(lockfilename, poll_ms=10*_SLEEP_FACTOR).concurrent():
         print(f"{pfx} acquired a concurrent lock at {ts()}", flush=True)
         enter_order.append(name)
         sleep(duration)
@@ -63,7 +63,7 @@ def Writer(lockfilename, name, delay, duration, enter_order, leave_order):
     print(f"{pfx} will idle for {delay} seconds", flush=True)
     sleep(delay)
     print(f"{pfx} will be writing for {duration} seconds", flush=True)
-    with Twpl(lockfilename).exclusive(poll_ms=10):
+    with Twpl(lockfilename, poll_ms=10*_SLEEP_FACTOR).exclusive():
         print(f"{pfx} acquired an exclusive lock at {ts()}", flush=True)
         enter_order.append(name)
         sleep(duration)
@@ -80,16 +80,18 @@ def basic_methods(lockfilename):
         with Twpl(lockfilename).concurrent() as lock:
             assert lock.mode == CONCURRENT
         assert lock.mode is None
-    with NamedTest(f"_NOT_IMPLEMENTED"):
-        for mode in EXCLUSIVE, CONCURRENT:
-            try:
-                Twpl(lockfilename).acquire(mode)
-            except Exception as e:
-                assert isinstance(e, NotImplementedError)
-        try:
-            Twpl(lockfilename).release()
-        except Exception as e:
-            assert isinstance(e, NotImplementedError)
+    with NamedTest(f".acquire() / .release()"):
+        lock = Twpl(lockfilename)
+        assert lock.acquire(EXCLUSIVE).mode == EXCLUSIVE
+        assert lock.state.exclusive
+        assert lock.release().mode is None
+        assert lock.acquire(CONCURRENT).mode == CONCURRENT
+        assert lock.acquire(CONCURRENT).mode == CONCURRENT
+        assert lock.state.concurrent == 2
+        assert lock.release().mode == CONCURRENT
+        assert lock.release().mode is None
+        assert lock.release().mode is None
+        assert not (lock.state.concurrent or lock.state.exclusive)
     with NamedTest(f".clean({lockfilename!r})"):
         assert not Twpl(lockfilename).clean(min_age_ms=60000)
         assert path.isfile(lockfilename)
@@ -106,6 +108,8 @@ def readers(lockfilename):
         ))
         Twpl(lockfilename).clean(min_age_ms=0)
         assert (ts() - start_ts) < 10 * _SLEEP_FACTOR
+        # note: this assertion may fail if _SLEEP_FACTOR is really low and the
+        # hardware doesn't keep up
 
 
 def nested_readers(lockfilename):
