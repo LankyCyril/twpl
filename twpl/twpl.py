@@ -8,6 +8,7 @@ from tempfile import NamedTemporaryFile
 from glob import iglob
 from filelock import Timeout as FileLockTimeoutError, FileLock
 from multiprocessing import Lock
+from types import SimpleNamespace
 from contextlib import contextmanager
 from datetime import datetime
 from time import sleep
@@ -89,6 +90,10 @@ class Twpl():
             self.__is_locked_exclusively = False
  
     @property
+    def filename(self):
+        return self.__filename
+ 
+    @property
     def mode(self):
         with self.__countlock:
             if self.__is_locked_exclusively:
@@ -101,8 +106,12 @@ class Twpl():
                 return None
  
     @property
-    def filename(self):
-        return self.__filename
+    def state(self):
+        return SimpleNamespace(
+            mode=self.mode,
+            exclusive=self.__is_locked_exclusively,
+            concurrent=len(self.__handles),
+        )
  
     def acquire(self, mode, *, poll_ms=None):
         """User interface for explicit acquisition. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""

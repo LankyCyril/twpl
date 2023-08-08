@@ -11,7 +11,7 @@ print(f"Loaded from {modules['twpl'].__file__}")
 print(f"{__version__=}")
 
 
-_SLEEP_FACTOR = .03
+_SLEEP_FACTOR = .05
 
 
 def ts():
@@ -83,12 +83,15 @@ def basic_methods(lockfilename):
     with NamedTest(f".acquire() / .release()"):
         lock = Twpl(lockfilename)
         assert lock.acquire(EXCLUSIVE).mode == EXCLUSIVE
+        assert lock.state.exclusive
         assert lock.release().mode is None
         assert lock.acquire(CONCURRENT).mode == CONCURRENT
         assert lock.acquire(CONCURRENT).mode == CONCURRENT
+        assert lock.state.concurrent == 2
         assert lock.release().mode == CONCURRENT
         assert lock.release().mode is None
         assert lock.release().mode is None
+        assert not (lock.state.concurrent or lock.state.exclusive)
     with NamedTest(f".clean({lockfilename!r})"):
         assert not Twpl(lockfilename).clean(min_age_ms=60000)
         assert path.isfile(lockfilename)
