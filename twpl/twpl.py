@@ -1,9 +1,9 @@
+# TODO: is it possible that new /proc entries are created while we waffle about?
 # TODO: more tests
 # TODO: implement timeout for acquisition
-# TODO: glob faster somehow - start from own PID?
 
 from sys import platform
-from os import path, stat, remove
+from os import path, stat, getpid, walk, remove
 from tempfile import NamedTemporaryFile
 from glob import iglob
 from filelock import Timeout as FileLockTimeoutError, FileLock
@@ -54,9 +54,22 @@ def fds_exceed(filename, mincount, fdcache):
 
 def _fds_exceed_POSIX(filename, mincount, fdcache):
     realpath, n, fdcache_copy = path.realpath(filename), 0, set(fdcache)
-    def _iter_fds(PAT="/proc/[0-9]*/fd/*"):
+    def _iter_fds():
         yield from fdcache_copy
-        yield from (fd for fd in iglob(PAT) if fd not in fdcache_copy)
+        def _iter_pids():
+            ownpid, preceding_pids = getpid(), []
+            for d in next(walk("/proc"))[1]:
+                if d.isdigit():
+                    pid = int(d)
+                    if pid < ownpid:
+                        preceding_pids.append(pid)
+                    else:
+                        yield pid
+            yield from reversed(preceding_pids)
+        for pid in _iter_pids():
+            for fd in iglob(f"/proc/{pid}/fd/*"):
+                if fd not in fdcache_copy:
+                    yield fd
     for fd in _iter_fds():
         try:
             if path.realpath(fd) == realpath:

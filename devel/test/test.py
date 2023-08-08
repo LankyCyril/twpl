@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from twpl import Twpl, __version__, EXCLUSIVE, CONCURRENT
-from sys import modules, stderr
+from sys import modules
 from datetime import datetime
 from contextlib import contextmanager
 from threading import Thread
@@ -21,16 +21,16 @@ def ts():
 @contextmanager
 def NamedTest(name):
     start_ts = ts()
-    print(f"TEST STARTED | {name}", file=stderr)
+    print(f"TEST STARTED | {name}")
     try:
         yield
     except:
-        print(f"{'FAIL!':>12} | {name}", file=stderr)
-        print(f"{'`':>14} in {ts()-start_ts}", file=stderr)
+        print(f"{'FAIL!':>12} | {name}")
+        print(f"{'`':>14} in {ts()-start_ts}")
         raise
     else:
-        print(f"{'SUCCESS':>12} | {name}", file=stderr)
-        print(f"{'`':>14} in {ts()-start_ts}", file=stderr)
+        print(f"{'SUCCESS':>12} | {name}")
+        print(f"{'`':>14} in {ts()-start_ts}")
 
 
 def await_daemons(*daemon_param_tuples):
