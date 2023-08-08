@@ -80,18 +80,15 @@ def basic_methods(lockfilename):
         with Twpl(lockfilename).concurrent() as lock:
             assert lock.mode == CONCURRENT
         assert lock.mode is None
-    with NamedTest(f"_NOT_IMPLEMENTED"):
-        # TODO: they're implemented now - btw, this still passes because
-        # this block has never checked for "no exceptions"
-        for mode in EXCLUSIVE, CONCURRENT:
-            try:
-                Twpl(lockfilename).acquire(mode)
-            except Exception as e:
-                assert isinstance(e, NotImplementedError)
-        try:
-            Twpl(lockfilename).release()
-        except Exception as e:
-            assert isinstance(e, NotImplementedError)
+    with NamedTest(f".acquire() / .release()"):
+        lock = Twpl(lockfilename)
+        assert lock.acquire(EXCLUSIVE).mode == EXCLUSIVE
+        assert lock.release().mode is None
+        assert lock.acquire(CONCURRENT).mode == CONCURRENT
+        assert lock.acquire(CONCURRENT).mode == CONCURRENT
+        assert lock.release().mode == CONCURRENT
+        assert lock.release().mode is None
+        assert lock.release().mode is None
     with NamedTest(f".clean({lockfilename!r})"):
         assert not Twpl(lockfilename).clean(min_age_ms=60000)
         assert path.isfile(lockfilename)

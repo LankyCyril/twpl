@@ -15,7 +15,7 @@ from time import sleep
 
 __version__ = "0.1.0"
 
-EXCLUSIVE, CONCURRENT = 0, 1
+EXCLUSIVE, CONCURRENT = 1, 2
 
 TwplPlatformError = type("TwplPlatformError", (OSError,), {})
 TwplValueError = type("TwplValueError", (ValueError,), {})
@@ -119,6 +119,8 @@ class Twpl():
             return self.__release_exclusive()
         elif self.mode == CONCURRENT:
             return self.__release_concurrent()
+        else:
+            return self
  
     @contextmanager
     def exclusive(self, *, poll_ms=None):
@@ -170,6 +172,7 @@ class Twpl():
             assert self.__is_locked_exclusively, _BUGASS
             self.__is_locked_exclusively = False
             self.__filelock.release()
+            return self
  
     def __acquire_concurrent(self, poll_ms):
         poll_s = (self.__poll_ms if (poll_ms is None) else poll_ms) / 1000
@@ -187,6 +190,7 @@ class Twpl():
         with self.__countlock:
             assert self.__handles, _BUGASS
             self.__handles.pop().close() # reduce fd count
+            return self
  
     def __del__(self):
         with self.__countlock:
