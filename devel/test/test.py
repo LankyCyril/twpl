@@ -46,7 +46,7 @@ def Reader(lockfilename, name, delay, duration, enter_order, leave_order):
     print(f"{pfx} will idle for {delay} seconds", flush=True)
     sleep(delay)
     print(f"{pfx} will be reading for {duration} seconds", flush=True)
-    with Twpl(lockfilename, poll_ms=10*_SLEEP_FACTOR).concurrent():
+    with Twpl(lockfilename, poll_interval=.01*_SLEEP_FACTOR).concurrent():
         print(f"{pfx} acquired a concurrent lock at {ts()}", flush=True)
         enter_order.append(name)
         sleep(duration)
@@ -60,7 +60,7 @@ def Writer(lockfilename, name, delay, duration, enter_order, leave_order):
     print(f"{pfx} will idle for {delay} seconds", flush=True)
     sleep(delay)
     print(f"{pfx} will be writing for {duration} seconds", flush=True)
-    with Twpl(lockfilename, poll_ms=10*_SLEEP_FACTOR).exclusive():
+    with Twpl(lockfilename, poll_interval=.01*_SLEEP_FACTOR).exclusive():
         print(f"{pfx} acquired an exclusive lock at {ts()}", flush=True)
         enter_order.append(name)
         sleep(duration)
@@ -90,9 +90,9 @@ def basic_methods(lockfilename):
         assert lock.release().mode is None
         assert not (lock.state.concurrent or lock.state.exclusive)
     with NamedTest(f".clean({lockfilename!r})"):
-        assert not Twpl(lockfilename).clean(min_age_ms=60000)
+        assert not Twpl(lockfilename).clean(min_age_seconds=60)
         assert path.isfile(lockfilename)
-        assert Twpl(lockfilename).clean(min_age_ms=0)
+        assert Twpl(lockfilename).clean(min_age_seconds=0)
         assert not path.exists(lockfilename)
 
 
@@ -103,7 +103,7 @@ def writers(lockfilename):
             (Writer, lockfilename, reader_name, 0, 10, order, order)
             for reader_name in ("R1", "R2", "R3", "R4", "R5")
         ))
-        Twpl(lockfilename).clean(min_age_ms=0)
+        Twpl(lockfilename).clean(min_age_seconds=0)
         print(f"{'|':>14} {order=}", flush=True)
         assert order[::2] == order[1::2]
 
@@ -115,7 +115,7 @@ def readers(lockfilename):
             (Reader, lockfilename, reader_name, delay, 10, order, order)
             for delay, reader_name in enumerate(("R1", "R2", "R3", "R4", "R5"))
         ))
-        Twpl(lockfilename).clean(min_age_ms=0)
+        Twpl(lockfilename).clean(min_age_seconds=0)
         print(f"{'|':>14} {order=}", flush=True)
         assert order[:5] == order[5:]
 
@@ -133,7 +133,7 @@ def nested_readers(lockfilename):
                             print(f"{'|':>14} 5 concurrent readers", flush=True)
                             print(f"{'|':>14} {lock.mode=}", flush=True)
         writer.join()
-        Twpl(lockfilename).clean(min_age_ms=0)
+        Twpl(lockfilename).clean(min_age_seconds=0)
 
 
 def readers_writer_readers(lockfilename):
@@ -146,7 +146,7 @@ def readers_writer_readers(lockfilename):
             (Reader, lockfilename, "R3", 3,  4, enter_order, leave_order),
             (Reader, lockfilename, "R4", 4,  6, enter_order, leave_order),
         )
-        Twpl(lockfilename).clean(min_age_ms=0)
+        Twpl(lockfilename).clean(min_age_seconds=0)
         print(f"{'|':>14} {enter_order=}", flush=True)
         print(f"{'|':>14} {leave_order=}", flush=True)
         assert enter_order[:2] == ["R1", "W1"]
