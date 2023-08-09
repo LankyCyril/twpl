@@ -1,6 +1,3 @@
-# TODO: more tests
-# TODO: implement timeout for acquisition
-
 from sys import platform
 from os import path, stat, getpid, walk, remove
 from tempfile import NamedTemporaryFile
@@ -126,7 +123,7 @@ class Twpl():
             concurrent=len(self.__handles),
         )
  
-    def acquire(self, mode, *, poll_ms=None):
+    def acquire(self, mode, *, poll_ms=None): # TODO: implement timeout for acquisition
         """User interface for explicit acquisition. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""
         if mode == EXCLUSIVE:
             return self.__acquire_exclusive(poll_ms)
@@ -179,7 +176,7 @@ class Twpl():
             pass
         return False
  
-    def __acquire_exclusive(self, poll_ms):
+    def __acquire_exclusive(self, poll_ms): # TODO: implement timeout for acquisition
         poll_s = (self.__poll_ms if (poll_ms is None) else poll_ms) / 1000
         self.__filelock.acquire(poll_interval=poll_s/3)
         while fds_exceed(self.__filename, 1, self.__fdcache):
@@ -196,7 +193,7 @@ class Twpl():
             self.__filelock.release()
             return self
  
-    def __acquire_concurrent(self, poll_ms):
+    def __acquire_concurrent(self, poll_ms): # TODO: implement timeout for acquisition
         poll_s = (self.__poll_ms if (poll_ms is None) else poll_ms) / 1000
         self.__filelock.acquire(poll_interval=poll_s/3) # intercept momentarily
         try:

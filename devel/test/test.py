@@ -11,11 +11,8 @@ print(f"Loaded from {modules['twpl'].__file__}")
 print(f"{__version__=}")
 
 
-_SLEEP_FACTOR = .05
-
-
-def ts():
-    return datetime.now().timestamp()
+_SLEEP_FACTOR = .02
+ts = lambda: datetime.now().timestamp()
 
 
 @contextmanager
@@ -99,17 +96,28 @@ def basic_methods(lockfilename):
         assert not path.exists(lockfilename)
 
 
-def readers(lockfilename):
-    with NamedTest(f"readers({lockfilename!r})"):
-        start_ts, dummy = ts(), []
+def writers(lockfilename):
+    with NamedTest(f"writers({lockfilename!r})"):
+        order = []
         await_daemons(*(
-            (Reader, lockfilename, reader_name, 0, 5, dummy, dummy)
+            (Writer, lockfilename, reader_name, 0, 10, order, order)
             for reader_name in ("R1", "R2", "R3", "R4", "R5")
         ))
         Twpl(lockfilename).clean(min_age_ms=0)
-        assert (ts() - start_ts) < 10 * _SLEEP_FACTOR
-        # note: this assertion may fail if _SLEEP_FACTOR is really low and the
-        # hardware doesn't keep up
+        print(f"{'|':>14} {order=}", flush=True)
+        assert order[::2] == order[1::2]
+
+
+def readers(lockfilename):
+    with NamedTest(f"readers({lockfilename!r})"):
+        order = []
+        await_daemons(*(
+            (Reader, lockfilename, reader_name, delay, 10, order, order)
+            for delay, reader_name in enumerate(("R1", "R2", "R3", "R4", "R5"))
+        ))
+        Twpl(lockfilename).clean(min_age_ms=0)
+        print(f"{'|':>14} {order=}", flush=True)
+        assert order[:5] == order[5:]
 
 
 def nested_readers(lockfilename):
@@ -128,34 +136,25 @@ def nested_readers(lockfilename):
         Twpl(lockfilename).clean(min_age_ms=0)
 
 
-def writers(lockfilename):
-    with NamedTest(f"writers({lockfilename!r})"):
-        enter_order, leave_order = [], []
-        await_daemons(*(
-            (Writer, lockfilename, writer_name, 0, 2, enter_order, leave_order)
-            for writer_name in (f"W{i}" for i in range(1, 10))
-        ))
-        Twpl(lockfilename).clean(min_age_ms=0)
-        assert enter_order == leave_order
-
-
 def readers_writer_readers(lockfilename):
     with NamedTest(f"readers_writer_readers({lockfilename!r})"):
         enter_order, leave_order = [], []
         await_daemons(
-            (Reader, lockfilename, "R1", 0,  4, enter_order, leave_order),
-            (Reader, lockfilename, "R2", 1,  2, enter_order, leave_order),
-            (Writer, lockfilename, "W1", .2, 2, enter_order, leave_order),
-            (Reader, lockfilename, "R3", 5,  4, enter_order, leave_order),
-            (Reader, lockfilename, "R4", 5,  6, enter_order, leave_order),
+            (Reader, lockfilename, "R1", 0,  3, enter_order, leave_order),
+            (Reader, lockfilename, "R2", 2,  2, enter_order, leave_order),
+            (Writer, lockfilename, "W1", 1,  2, enter_order, leave_order),
+            (Reader, lockfilename, "R3", 3,  4, enter_order, leave_order),
+            (Reader, lockfilename, "R4", 4,  6, enter_order, leave_order),
         )
         Twpl(lockfilename).clean(min_age_ms=0)
+        print(f"{'|':>14} {enter_order=}", flush=True)
+        print(f"{'|':>14} {leave_order=}", flush=True)
         assert enter_order[:2] == ["R1", "W1"]
         assert leave_order == ["R1", "W1", "R2", "R3", "R4"]
 
 if __name__ == "__main__":
     basic_methods("devel/test/basic.lockfile")
+    writers("devel/test/writers.lockfile")
     readers("devel/test/readers.lockfile")
     nested_readers("devel/test/nested_readers.lockfile")
-    writers("devel/test/writers.lockfile")
     readers_writer_readers("devel/test/rs_w_rs.lockfile")
