@@ -1,4 +1,3 @@
-# TODO: is it possible that new /proc entries are created while we waffle about?
 # TODO: more tests
 # TODO: implement timeout for acquisition
 
@@ -53,23 +52,24 @@ def fds_exceed(filename, mincount, fdcache):
 
 
 def _fds_exceed_POSIX(filename, mincount, fdcache):
+    # This replaces fds_exceed. Note that it only checks the number of open fds
+    # under an acquired FileLock (Twpl.__acquire_exclusive()), and the number of
+    # open fds can only grow under the same FileLock as well: via open() in
+    # Twpl.__acquire_concurrent(). So while fd symlinks can disappear while we
+    # iterate here, there will never be new relevant fds missed by walk().
     realpath, n, fdcache_copy = path.realpath(filename), 0, set(fdcache)
     def _iter_fds():
         yield from fdcache_copy
         def _iter_pids():
             ownpid, preceding_pids = getpid(), []
-            for d in next(walk("/proc"))[1]:
-                if d.isdigit():
-                    pid = int(d)
-                    if pid < ownpid:
-                        preceding_pids.append(pid)
-                    else:
-                        yield pid
+            for pid in (int(d) for d in next(walk("/proc"))[1] if d.isdigit()):
+                if pid < ownpid:
+                    preceding_pids.append(pid)
+                else:
+                    yield pid
             yield from reversed(preceding_pids)
-        for pid in _iter_pids():
-            for fd in iglob(f"/proc/{pid}/fd/*"):
-                if fd not in fdcache_copy:
-                    yield fd
+        for fds in (iglob(f"/proc/{pid}/fd/*") for pid in _iter_pids()):
+            yield from (fd for fd in fds if fd not in fdcache_copy)
     for fd in _iter_fds():
         try:
             if path.realpath(fd) == realpath:
