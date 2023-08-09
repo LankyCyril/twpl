@@ -87,17 +87,18 @@ class Twpl():
     """Ties itself to a lockfile and provides exclusive (always singular) and concurrent (multiple in absence of exclusive) locks"""
  
     __slots__ = (
-        "__filename", "__filelock", "__poll_ms",
-        "__fdcache", "__countlock", "__handles", "__is_locked_exclusively",
+        "__filename", "__poll_ms", "__countlock", "__fdcache", "__handles",
+        "__is_locked_exclusively", "__exclusive_filelock",
     )
  
     def __init__(self, filename, *, poll_ms=100):
         """Create lock object"""
         with FileLock(filename): # let filelock.FileLock() trigger checks
-            self.__filename, self.__filelock = filename, FileLock(filename)
-            self.__poll_ms, self.__fdcache = poll_ms, set()
-            self.__countlock, self.__handles = Lock(), []
+            self.__filename = filename
+            self.__poll_ms, self.__countlock = poll_ms, Lock()
+            self.__fdcache, self.__handles = set(), []
             self.__is_locked_exclusively = False
+            self.__exclusive_filelock = FileLock(filename)
  
     @property
     def filename(self):
@@ -178,7 +179,7 @@ class Twpl():
  
     def __acquire_exclusive(self, poll_ms): # TODO: implement timeout for acquisition
         poll_s = (self.__poll_ms if (poll_ms is None) else poll_ms) / 1000
-        self.__filelock.acquire(poll_interval=poll_s/3)
+        self.__exclusive_filelock.acquire(poll_interval=poll_s/3)
         while fds_exceed(self.__filename, 1, self.__fdcache):
             sleep(poll_s) # wait for all locks
         with self.__countlock:
@@ -190,16 +191,19 @@ class Twpl():
         with self.__countlock:
             assert self.__is_locked_exclusively, _BUGASS
             self.__is_locked_exclusively = False
-            self.__filelock.release()
+            assert self.__exclusive_filelock.is_locked, _BUGASS
+            self.__exclusive_filelock.release()
             return self
  
     def __acquire_concurrent(self, poll_ms): # TODO: implement timeout for acquisition
         poll_s = (self.__poll_ms if (poll_ms is None) else poll_ms) / 1000
-        self.__filelock.acquire(poll_interval=poll_s/3) # intercept momentarily
-        try:
-            h = open(self.__filename) # grow fd count, prevent exclusive locks
-        finally:
-            self.__filelock.release() # but allow concurrent locks to intercept
+        momentary_filelock = FileLock(self.__filename)
+        # intercept momentarily, forcing all new locks to block:
+        momentary_filelock.acquire(poll_interval=poll_s/3)
+        try: # grow fd count, prevent exclusive locks
+            h = open(self.__filename)
+        finally: # but allow other concurrent locks to intercept
+            momentary_filelock.release()
         with self.__countlock:
             assert not self.__is_locked_exclusively, _BUGASS
             self.__handles.append(h)
@@ -214,7 +218,8 @@ class Twpl():
     def __del__(self):
         with self.__countlock:
             if self.__is_locked_exclusively:
+                assert self.__exclusive_filelock.is_locked, _BUGASS
+                self.__exclusive_filelock.release()
                 self.__is_locked_exclusively = False
-                self.__filelock.release()
             while self.__handles:
                 self.__handles.pop().close()
