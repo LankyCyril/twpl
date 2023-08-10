@@ -27,7 +27,7 @@ _ERR_PLATFORM_TEST = "/proc is not available and/or not a Linux/POSIX system"
 _ERR_MODE = "Twpl().acquire() argument `mode` must be EXCLUSIVE or CONCURRENT"
 _ERR_ACQUIRE = "File lock could not be acquired in time ({}, timeout={})".format
 _ERR_STATE = " ".join((
-    "Instance of Twpl() is in an error state due to a previous"
+    "Instance of Twpl() is in an error state due to a previous",
     "(ignored? unhandled?) exception; will not proceed",
 ))
 _BUGASS = " ".join((
