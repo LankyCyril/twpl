@@ -132,9 +132,9 @@ class Twpl():
     def state(self):
         return SimpleNamespace(
             mode=self.mode,
-            exclusive=self.__is_locked_exclusively,
-            concurrent=len(self.__handles),
-            error=(self.__error is not None),
+            n_exclusive_locks=int(self.__is_locked_exclusively),
+            n_concurrent_locks=len(self.__handles),
+            error=self.__error,
         )
  
     def acquire(self, mode, *, poll_interval=None, timeout=None):

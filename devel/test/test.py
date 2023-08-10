@@ -106,15 +106,15 @@ def basic_methods(lockfilename):
     with NamedTest(f".acquire|release", lockfilename):
         lock = Twpl(lockfilename)
         assert lock.acquire(EXCLUSIVE).mode == EXCLUSIVE
-        assert lock.state.exclusive
+        assert lock.state.n_exclusive_locks
         assert lock.release().mode is None
         assert lock.acquire(CONCURRENT).mode == CONCURRENT
         assert lock.acquire(CONCURRENT).mode == CONCURRENT
-        assert lock.state.concurrent == 2
+        assert lock.state.n_concurrent_locks == 2
         assert lock.release().mode == CONCURRENT
         assert lock.release().mode is None
         assert lock.release().mode is None
-        assert not (lock.state.concurrent or lock.state.exclusive)
+        assert lock.state.n_concurrent_locks==lock.state.n_exclusive_locks==0
     with NamedTest(".clean", lockfilename):
         assert not Twpl(lockfilename).clean(min_age_seconds=60)
         assert path.isfile(lockfilename)
