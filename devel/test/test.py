@@ -16,17 +16,18 @@ ts = lambda: datetime.now().timestamp()
 
 
 @contextmanager
-def NamedTest(name, lockfilename):
+def NamedTest(name, lockfilename, *args):
+    repr_args = ", ".join(map(repr, (lockfilename, *args)))
     start_ts = ts()
-    print(f"TEST STARTED | {name}({lockfilename!r})")
+    print(f"TEST STARTED | {name}({repr_args})")
     try:
         yield
     except:
-        print(f"{'FAIL!':>12} | {name}({lockfilename!r})")
+        print(f"{'FAIL!':>12} | {name}({repr_args})")
         print(f"{'`':>14} in {ts()-start_ts}")
         raise
     else:
-        print(f"{'SUCCESS':>12} | {name}({lockfilename!r})")
+        print(f"{'SUCCESS':>12} | {name}({repr_args})")
         print(f"{'`':>14} in {ts()-start_ts}")
     finally:
         try:
@@ -35,11 +36,27 @@ def NamedTest(name, lockfilename):
             pass
 
 
+class ExceptionPropagatingThread(Thread):
+    def run(self):
+        try:
+            super().run()
+        except Exception as e:
+            self.exception = e
+        else:
+            self.exception = None
+    def join(self):
+        super().join()
+        if self.exception is not None:
+            raise self.exception
+
+
 def await_daemons(*daemon_param_tuples):
     # TODO: ExceptionPropagatingThread
     daemons = []
     for target, *args in daemon_param_tuples:
-        daemon = Thread(target=target, args=args, daemon=True)
+        daemon = ExceptionPropagatingThread(
+            target=target, args=args, daemon=True,
+        )
         daemon.start()
         daemons.append(daemon)
     for daemon in daemons:
@@ -193,31 +210,92 @@ def reader_writer_timeout(lockfilename):
             raise RuntimeError("Expected TwplTimeoutError, got no error")
 
 
-def reader_writer_timeout_contextmanager(lockfilename):
-    with NamedTest("reader_writer_timeout", lockfilename):
+def timeouts_linear(lockfilename, timeout=2*_SLEEP_FACTOR):
+    with NamedTest("timeouts_linear", lockfilename, "CONCURRENT", "EXCLUSIVE"):
+        lock = Twpl(lockfilename).acquire(CONCURRENT)
+        try:
+            Twpl(lockfilename).acquire(EXCLUSIVE, timeout=timeout)
+        except TwplTimeoutError:
+            lock.release()
+        else:
+            raise RuntimeError("Expected TwplTimeoutError, got no error")
+    with NamedTest("timeouts_linear", lockfilename, "EXCLUSIVE", "CONCURRENT"):
+        lock = Twpl(lockfilename).acquire(EXCLUSIVE)
+        try:
+            Twpl(lockfilename).acquire(CONCURRENT, timeout=timeout)
+        except TwplTimeoutError:
+            lock.release()
+        else:
+            raise RuntimeError("Expected TwplTimeoutError, got no error")
+    with NamedTest("timeouts_linear", lockfilename, "EXCLUSIVE", "EXCLUSIVE"):
+        lock = Twpl(lockfilename).acquire(EXCLUSIVE)
+        try:
+            Twpl(lockfilename).acquire(EXCLUSIVE, timeout=timeout)
+        except TwplTimeoutError:
+            lock.release()
+        else:
+            raise RuntimeError("Expected TwplTimeoutError, got no error")
+    with NamedTest("timeouts_linear", lockfilename, "CONCURRENT", "CONCURRENT"):
+        lock = Twpl(lockfilename).acquire(CONCURRENT)
+        Twpl(lockfilename).acquire(CONCURRENT).release()
+        lock.release()
+
+
+def timeouts_outer_contextmanager(lockfilename, timeout=2*_SLEEP_FACTOR):
+    with NamedTest("timeouts_outer_contextmanager", lockfilename):
         with Twpl(lockfilename).concurrent():
             try:
-                Twpl(lockfilename).acquire(EXCLUSIVE, timeout=2*_SLEEP_FACTOR)
+                Twpl(lockfilename).acquire(EXCLUSIVE, timeout=timeout)
             except TwplTimeoutError:
                 pass
             else:
                 raise RuntimeError("Expected TwplTimeoutError, got no error")
         with Twpl(lockfilename).exclusive():
             try:
-                Twpl(lockfilename).acquire(CONCURRENT, timeout=2*_SLEEP_FACTOR)
+                Twpl(lockfilename).acquire(CONCURRENT, timeout=timeout)
             except TwplTimeoutError:
                 pass
             else:
                 raise RuntimeError("Expected TwplTimeoutError, got no error")
         with Twpl(lockfilename).exclusive():
             try:
-                Twpl(lockfilename).acquire(EXCLUSIVE, timeout=2*_SLEEP_FACTOR)
+                Twpl(lockfilename).acquire(EXCLUSIVE, timeout=timeout)
             except TwplTimeoutError:
                 pass
             else:
                 raise RuntimeError("Expected TwplTimeoutError, got no error")
         with Twpl(lockfilename).concurrent():
-            with Twpl(lockfilename).acquire(CONCURRENT, timeout=_SLEEP_FACTOR):
+            Twpl(lockfilename).acquire(CONCURRENT).release()
+
+
+def timeouts_contextmanagers(lockfilename, timeout=2*_SLEEP_FACTOR):
+    with NamedTest("timeouts_contextmanagers", lockfilename):
+        with Twpl(lockfilename).concurrent():
+            try:
+                with Twpl(lockfilename).acquire(EXCLUSIVE, timeout=timeout):
+                    pass
+            except TwplTimeoutError:
+                pass
+            else:
+                raise RuntimeError("Expected TwplTimeoutError, got no error")
+        with Twpl(lockfilename).exclusive():
+            try:
+                with Twpl(lockfilename).acquire(CONCURRENT, timeout=timeout):
+                    pass
+            except TwplTimeoutError:
+                pass
+            else:
+                raise RuntimeError("Expected TwplTimeoutError, got no error")
+        with Twpl(lockfilename).exclusive():
+            try:
+                with Twpl(lockfilename).acquire(EXCLUSIVE, timeout=timeout):
+                    pass
+            except TwplTimeoutError:
+                pass
+            else:
+                raise RuntimeError("Expected TwplTimeoutError, got no error")
+        with Twpl(lockfilename).concurrent():
+            with Twpl(lockfilename).concurrent():
                 pass
 
 
@@ -228,4 +306,6 @@ if __name__ == "__main__":
     nested_readers("devel/test/nested_readers.lockfile")
     readers_writer_readers("devel/test/rs_w_rs.lockfile")
     reader_writer_timeout("devel/test/timeouts.lockfile")
-    reader_writer_timeout_contextmanager("devel/test/timeouts.lockfile")
+    timeouts_linear("devel/test/timeouts.lockfile")
+    timeouts_outer_contextmanager("devel/test/timeouts.lockfile")
+    timeouts_contextmanagers("devel/test/timeouts.lockfile")

@@ -18,6 +18,7 @@ TwplPlatformError = type("TwplPlatformError", (OSError,), {})
 TwplValueError = type("TwplValueError", (ValueError,), {})
 TwplTimeoutError = type("TwplTimeoutError", (TimeoutError,), {})
 TwplStateError = type("TwplStateError", (RuntimeError,), {})
+
 _ERR_PROC_TEST = "Test poll of /proc returned an unexpected value ({})".format
 _ERR_PLATFORM_TEST = "/proc is not available and/or not a Linux/POSIX system"
 _ERR_MODE = "Twpl().acquire() argument `mode` must be EXCLUSIVE or CONCURRENT"
@@ -214,6 +215,7 @@ class Twpl():
                 if timeout is not None:
                     timeout_remaining -= (poll_interval or self.__poll_interval)
                     if timeout_remaining < 0:
+                        self.__exclusive_filelock.release()
                         raise FileLockTimeoutError(self.__filename)
                 # wait for all locks:
                 sleep(poll_interval or self.__poll_interval)
