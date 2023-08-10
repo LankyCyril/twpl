@@ -218,14 +218,16 @@ class Twpl():
                 if timeout is not None:
                     timeout_remaining -= (poll_interval or self.__poll_interval)
                     if timeout_remaining < 0:
-                        self.__exclusive_filelock.release()
                         raise FileLockTimeoutError(self.__filename)
                 # wait for all locks:
                 sleep(poll_interval or self.__poll_interval)
-        except FileLockTimeoutError:
-            e = TwplTimeoutError(_ERR_ACQUIRE(self.__filename, timeout))
+        except Exception as e:
+            if self.__exclusive_filelock.is_locked:
+                self.__exclusive_filelock.release()
+            if isinstance(e, FileLockTimeoutError):
+                e = TwplTimeoutError(_ERR_ACQUIRE(self.__filename, timeout))
             self.__error = e
-            raise self.__error
+            raise e
         with self.__countlock:
             assert not (self.__is_locked_exclusively or self.__handles), _BUGASS
             self.__is_locked_exclusively = True
