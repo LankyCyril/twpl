@@ -240,7 +240,8 @@ class Twpl():
                 self.__is_locked_exclusively = False
             if not self.__error:
                 assert self.__exclusive_filelock.is_locked, _BUGASS
-            self.__exclusive_filelock.release()
+            if self.__exclusive_filelock.is_locked:
+                self.__exclusive_filelock.release()
             return self
  
     def __acquire_concurrent(self, poll_interval, timeout):
@@ -254,13 +255,12 @@ class Twpl():
             e = TwplTimeoutError(_ERR_ACQUIRE(self.__filename, timeout))
             self.__error = e
             raise self.__error
-        try: # grow fd count, prevent exclusive locks
-            h = open(self.__filename)
-        finally: # but allow other concurrent locks to intercept
-            momentary_filelock.release()
         with self.__countlock:
             assert not self.__is_locked_exclusively, _BUGASS
-            self.__handles.append(h)
+            try: # grow fd count, prevent exclusive locks
+                self.__handles.append(open(self.__filename))
+            finally: # but allow other concurrent locks to intercept
+                momentary_filelock.release()
         return self
  
     def __release_concurrent(self):
