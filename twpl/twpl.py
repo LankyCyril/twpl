@@ -12,7 +12,10 @@ from time import sleep
 
 __version__ = "0.1.0"
 
-EXCLUSIVE, CONCURRENT = 1, 2
+NamedInt = lambda v, r: type("NamedInt", (int,), dict(
+    __new__=lambda s: int.__new__(s, v), __repr__=lambda s: r,
+))()
+EXCLUSIVE, CONCURRENT = NamedInt(1, "EXCLUSIVE"), NamedInt(2, "CONCURRENT")
 
 TwplPlatformError = type("TwplPlatformError", (OSError,), {})
 TwplValueError = type("TwplValueError", (ValueError,), {})
