@@ -1,20 +1,23 @@
 import setuptools
 from types import SimpleNamespace
-from twpl import __version__
 
 
 meta = SimpleNamespace(
     __name__ = "twpl",
-    __version__ = __version__,
+    __version__ = "0.1.1",
     __author__ = "Kirill Grigorev",
     __git_id__ = "LankyCyril",
     __license__ = "GPLv3",
+    __description__ = "Two-phase locking via lockfiles",
 )
 
 
 def get_readme(filename):
-    with open(filename) as readme_handle:
-        return readme_handle.read()
+    try:
+        with open(filename) as readme_handle:
+            return readme_handle.read()
+    except FileNotFoundError:
+        return meta.__description__
 
 
 if __name__ == "__main__":
