@@ -91,7 +91,7 @@ def _fds_exceed_posix(filename, mincount, fdcache):
                     return True
             elif fd in fdcache:
                 fdcache.remove(fd)
-        except FileNotFoundError:
+        except OSError:
             if fd in fdcache:
                 fdcache.remove(fd)
     else:
