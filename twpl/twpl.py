@@ -37,8 +37,10 @@ _BUGASS = " ".join((
 ))
 
 
-def fds_exceed(filename, mincount, fdcache):
-    """Check if number of open file descriptors for `filename` exceeds `mincount`"""
+def fds_exceed(filename, mincount, fdcache): # NOQA:F811
+    """ Check if number of open file descriptors for `filename`
+        exceeds `mincount`
+    """
     global fds_exceed
     # fds_exceed bootstraps itself on first call; this avoids, on the one hand,
     # checking on import and having to raise exceptions right away if something
@@ -47,24 +49,26 @@ def fds_exceed(filename, mincount, fdcache):
         with NamedTemporaryFile(mode="w") as tf: # self-test
             fdc = set()
             with open(tf.name):
-                if not _fds_exceed_POSIX(tf.name, 1, fdc):
+                if not _fds_exceed_posix(tf.name, 1, fdc):
                     raise TwplPlatformError(_ERR_PROC_TEST("<2"))
-                elif _fds_exceed_POSIX(tf.name, 2, fdc):
+                elif _fds_exceed_posix(tf.name, 2, fdc):
                     raise TwplPlatformError(_ERR_PROC_TEST(">2"))
                 else:
-                    _fds_exceed_POSIX.__doc__ = fds_exceed.__doc__
-                    fds_exceed = _fds_exceed_POSIX
-                    return _fds_exceed_POSIX(filename, mincount, fdcache)
+                    _fds_exceed_posix.__doc__ = fds_exceed.__doc__
+                    fds_exceed = _fds_exceed_posix
+                    return _fds_exceed_posix(filename, mincount, fdcache)
     else:
         raise TwplPlatformError(_ERR_PLATFORM_TEST)
 
 
-def _fds_exceed_POSIX(filename, mincount, fdcache):
-    # This replaces fds_exceed. Note that it only checks the number of open fds
-    # under an acquired FileLock (Twpl.__acquire_exclusive()), and the number of
-    # open fds can only grow under the same FileLock as well: via open() in
-    # Twpl.__acquire_concurrent(). So while fd symlinks can disappear while we
-    # iterate here, there will never be new relevant fds missed by walk().
+def _fds_exceed_posix(filename, mincount, fdcache):
+    """ This replaces fds_exceed. Note that it only checks the number of open
+        fds under an acquired FileLock (`Twpl.__acquire_exclusive()`), and the
+        number of open fds can only grow under the same FileLock as well: via
+        `open()` in `Twpl.__acquire_concurrent()`. So while fd symlinks can
+        disappear while we iterate here, there will never be new relevant fds
+        missed by `walk()`.
+    """
     realpath, n, fdcache_copy = path.realpath(filename), 0, set(fdcache)
     def _iter_fds():
         yield from fdcache_copy
@@ -95,7 +99,9 @@ def _fds_exceed_POSIX(filename, mincount, fdcache):
 
 
 class Twpl():
-    """Ties itself to a lockfile and provides exclusive (always singular) and concurrent (multiple in absence of exclusive) locks"""
+    """ Ties itself to a lockfile and provides exclusive (always singular) and
+        concurrent (multiple in absence of exclusive) locks
+    """
  
     __slots__ = (
         "__filename", "__poll_interval", "__countlock", "__fdcache",
@@ -104,7 +110,7 @@ class Twpl():
     )
  
     def __init__(self, filename, *, poll_interval=.1):
-        """Create lock object"""
+        """ Create lock object """
         self.__filename = filename
         self.__poll_interval, self.__countlock = poll_interval, Lock()
         self.__fdcache, self.__handles = set(), []
@@ -167,7 +173,7 @@ class Twpl():
             raise TwplStateError(_ERR_STATE, self.__error)
         try:
             yield self.__acquire_exclusive(poll_interval, timeout)
-        except Exception as e:
+        except Exception as e: # NOQA:BLE001
             self.__error = e
             raise self.__error
         finally:
@@ -180,7 +186,7 @@ class Twpl():
             raise TwplStateError(_ERR_STATE, self.__error)
         try:
             yield self.__acquire_concurrent(poll_interval, timeout)
-        except Exception as e:
+        except Exception as e: # NOQA:BLE001
             self.__error = e
             raise self.__error
         finally:
@@ -196,7 +202,8 @@ class Twpl():
                     # is locked on! Thus, here we can be certain we would be
                     # removing an unused lockfile.
                     st_ctime = stat(self.__filename).st_ctime
-                    dt = datetime.now() - datetime.fromtimestamp(st_ctime)
+                    then = datetime.fromtimestamp(st_ctime) # NOQA:DTZ006
+                    dt = datetime.now() - then # NOQA:DTZ005
                     if dt.total_seconds() >= min_age_seconds:
                         remove(self.__filename)
                         return True
@@ -206,14 +213,14 @@ class Twpl():
  
     def __acquire_exclusive(self, poll_interval, timeout):
         try:
-            start_ts = datetime.now()
+            start_ts = datetime.now() # NOQA:DTZ005
             self.__exclusive_filelock.acquire(
                 poll_interval=(poll_interval or self.__poll_interval)/3,
                 timeout=timeout,
             )
             if timeout is not None:
-                timeout_elapsed = (datetime.now() - start_ts).total_seconds()
-                timeout_remaining = timeout - timeout_elapsed
+                dt = datetime.now() - start_ts # NOQA:DTZ005
+                timeout_remaining = timeout - dt.total_seconds()
             while fds_exceed(self.__filename, 1, self.__fdcache):
                 if timeout is not None:
                     timeout_remaining -= (poll_interval or self.__poll_interval)
