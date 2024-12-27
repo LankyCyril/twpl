@@ -10,7 +10,7 @@ from datetime import datetime
 from time import sleep
 
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 NamedInt = lambda v, r: type("NamedInt", (int,), dict(
     __new__=lambda s: int.__new__(s, v), __repr__=lambda s: r,

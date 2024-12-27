@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 meta = SimpleNamespace(
     __name__ = "twpl",
-    __version__ = "0.1.2",
+    __version__ = "0.1.3",
     __author__ = "Kirill Grigorev",
     __git_id__ = "LankyCyril",
     __license__ = "GPLv3",
