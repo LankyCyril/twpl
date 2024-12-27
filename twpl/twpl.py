@@ -26,6 +26,7 @@ _ERR_PROC_TEST = "Test poll of /proc returned an unexpected value ({})".format
 _ERR_PLATFORM_TEST = "/proc is not available and/or not a Linux/POSIX system"
 _ERR_MODE = "Twpl().acquire() argument `mode` must be EXCLUSIVE or CONCURRENT"
 _ERR_ACQUIRE = "File lock could not be acquired in time ({}, timeout={})".format
+_ERR_EXCLUSIVE_CONCURRENCY = "Exclusive mode must have max_concurrency==1"
 _ERR_STATE = " ".join((
     "Instance of Twpl() is in an error state due to a previous",
     "(ignored? unhandled?) exception; will not proceed",
@@ -143,14 +144,20 @@ class Twpl():
             error=self.__error,
         )
  
-    def acquire(self, mode, *, poll_interval=None, timeout=None):
+    def acquire(self, mode, *, poll_interval=None, timeout=None, max_concurrency=None):
         """User interface for explicit acquisition. Context manager methods `.exclusive()` and `.concurrent()` are preferred over this"""
         if self.__error:
             raise TwplStateError(_ERR_STATE, self.__error)
         elif mode == EXCLUSIVE:
-            return self.__acquire_exclusive(poll_interval, timeout)
+            if max_concurrency not in {None, 1}:
+                raise TwplValueError(_ERR_EXCLUSIVE_CONCURRENCY)
+            else:
+                return self.__acquire_exclusive(poll_interval, timeout)
         elif mode == CONCURRENT:
-            return self.__acquire_concurrent(poll_interval, timeout)
+            return self.__acquire_concurrent(
+                poll_interval, timeout,
+                float("inf") if (max_concurrency is None) else max_concurrency,
+            )
         else:
             self.__error = TwplValueError(_ERR_MODE)
             raise self.__error
@@ -180,12 +187,14 @@ class Twpl():
             self.__release_exclusive()
  
     @contextmanager
-    def concurrent(self, *, poll_interval=None, timeout=None):
+    def concurrent(self, *, poll_interval=None, timeout=None, max_concurrency=float("inf")):
         """Wait for all exclusive locks to release, acquire concurrent file lock, enter context, release this concurrent lock"""
         if self.__error:
             raise TwplStateError(_ERR_STATE, self.__error)
         try:
-            yield self.__acquire_concurrent(poll_interval, timeout)
+            yield self.__acquire_concurrent(
+                poll_interval, timeout, max_concurrency,
+            )
         except Exception as e: # NOQA:BLE001
             self.__error = e
             raise self.__error
@@ -251,9 +260,10 @@ class Twpl():
                 self.__exclusive_filelock.release()
             return self
  
-    def __acquire_concurrent(self, poll_interval, timeout):
+    def __acquire_concurrent(self, poll_interval, timeout, max_concurrency=float("inf")):
+        start_ts = datetime.now() # NOQA:DTZ005
         momentary_filelock = FileLock(self.__filename)
-        try: # intercept momentarily, forcing all new locks to block:
+        try: # intercept for the duration of the check, so others' locks block:
             momentary_filelock.acquire(
                 poll_interval=(poll_interval or self.__poll_interval),
                 timeout=timeout,
@@ -264,6 +274,18 @@ class Twpl():
             raise self.__error
         with self.__countlock:
             assert not self.__is_locked_exclusively, _BUGASS
+            if timeout is not None:
+                dt = datetime.now() - start_ts # NOQA:DTZ005
+                timeout_remaining = timeout - dt.total_seconds()
+            fds_thresh = max_concurrency
+            while fds_exceed(self.__filename, fds_thresh, self.__fdcache):
+                if timeout is not None:
+                    timeout_remaining -= (poll_interval or self.__poll_interval)
+                    if timeout_remaining < 0:
+                        err = _ERR_ACQUIRE(self.__filename, timeout)
+                        raise TwplTimeoutError(err)
+                # wait for acceptable concurrency:
+                sleep(poll_interval or self.__poll_interval)
             try: # grow fd count, prevent exclusive locks
                 self.__handles.append(open(self.__filename))
             finally: # but allow other concurrent locks to intercept
