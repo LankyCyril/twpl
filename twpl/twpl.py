@@ -299,6 +299,35 @@ class Twpl():
                 self.__handles.pop().close() # reduce fd count
             return self
  
+    def _debug_get_fd_count_raw_posix(self):
+        """ This method duplicates a lot of code from `_fds_exceed_posix()`;
+            this is intentional. `_fds_exceed_posix()` is designed to return as
+            soon as possible and provide optimal performance; this here method
+            exists just for debugging purposes and will evaluate all fd links it
+            can find, without consulting an fd cache.
+            As such, there's little performance-oriented reasons to adhere to
+            the DRY principle and try to consolidate their functionality.
+        """
+        realpath, n = path.realpath(self.__filename), 0
+        def _iter_fds():
+            def _iter_pids():
+                ownpid, preceding_pids = getpid(), []
+                pids = (int(d) for d in next(walk("/proc"))[1] if d.isdigit())
+                for pid in pids:
+                    if pid < ownpid:
+                        preceding_pids.append(pid)
+                    else:
+                        yield pid
+                yield from reversed(preceding_pids)
+            for fds in (iglob(f"/proc/{pid}/fd/*") for pid in _iter_pids()):
+                yield from fds
+        for fd in _iter_fds():
+            try:
+                n += (path.realpath(fd) == realpath)
+            except OSError:
+                pass
+        return n
+ 
     def __del__(self):
         with self.__countlock:
             if self.__is_locked_exclusively:
